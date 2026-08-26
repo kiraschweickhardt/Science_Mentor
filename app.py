@@ -5,7 +5,7 @@ import experten
 import artefakte
 import abschnitte
 import difflib
-
+import traceback
 
 
 # --------------------------------------------------------------------------
@@ -66,6 +66,7 @@ CSS = """
     --status-frei:      #15803d;
     --herkunft-mensch:  #1f2328;
     --herkunft-ki:      #4f46e5;
+    --akzent: #4f46e5;
 }
 .dark {
     --status-arbeit:    #99968e;
@@ -73,6 +74,7 @@ CSS = """
     --status-frei:      #4ade80;
     --herkunft-mensch:  #e7e2d9;
     --herkunft-ki:      #a5b4fc;
+    --akzent: #a5b4fc;
 }
 .artefakt-zeile button { text-align: left !important; }
 .schwach button { opacity: 0.55 !important; }
@@ -89,26 +91,30 @@ CSS = """
 .warnung { font-size: 0.8em; color: var(--status-geaendert); }
 
 #seitenleiste {
-    max-height: calc(100vh - 90px);
-    overflow-y: auto;
-    padding-right: 0.5em;
+    height: calc(100vh - 2rem) !important;
+    overflow-y: auto !important;
+    flex-wrap: nowrap !important;
+    align-self: flex-start;
+    padding-right: 0.6em;
 }
 
-.schrittleiste { gap: 0.3em !important; margin-bottom: 0.5em; }
-.schritt-nr button {
+.schrittleiste { gap: 0.3em !important; margin-bottom: 0.4em; }
+
+.schritt-nr button, button.schritt-nr {
     padding: 0.3em 0 !important;
     font-size: 0.85em !important;
     font-weight: 600 !important;
     border-radius: 999px !important;
 }
-.nr-hier button {
-    border: 1px solid var(--color-accent, #4f46e5) !important;
-    color: var(--color-accent, #4f46e5) !important;
+.nr-hier button, button.nr-hier {
+    background: transparent !important;
+    border: 1px solid var(--akzent, #4f46e5) !important;
+    color: var(--akzent, #4f46e5) !important;
 }
-.nr-gezeigt button {
-    background: var(--color-accent, #4f46e5) !important;
+.nr-gezeigt button, button.nr-gezeigt {
+    background: var(--akzent, #4f46e5) !important;
+    border-color: var(--akzent, #4f46e5) !important;
     color: #fff !important;
-    border-color: transparent !important;
 }
 
 /* Gradio-Fußzeile ausblenden */
@@ -396,15 +402,104 @@ def artefakt_zeile(a, ausgegraut=False):
         elem_classes=["artefakt-zeile"] + (["schwach"] if ausgegraut else []),
     )
     btn.click(None, js=f"() => window.open('/doc?id={a['id']}', 'doc{a['id']}')")
-    gr.Markdown(status_punkt(lage), container=False)
+    gr.Markdown(status_chips(lage), container=False)
+
+
+def schritte_zeichnen(projekt_id, chat_id, offen_id):
+    if projekt_id is None:
+        gr.Markdown("*Bitte oben ein Projekt wählen.*")
+        return
+
+    schritte = db.schritte_holen(projekt_id)
+    if not schritte:
+        gr.Markdown(f"⚠️ Projekt {projekt_id} hat keine Schritte. "
+                    "Bitte ein anderes Projekt wählen oder neu anlegen.")
+        return
+
+    ids = [s["id"] for s in schritte]
+
+    # Wo steht das Gespräch? Nur gelten lassen, wenn es hierher gehört.
+    aktiver_schritt = None
+    if chat_id is not None:
+        s_akt = db.schritt_von_chat(chat_id)
+        if s_akt and s_akt["id"] in ids:
+            aktiver_schritt = s_akt["id"]
+
+    # Welcher Schritt wird angezeigt?
+    if offen_id in ids:
+        gezeigt = offen_id
+    elif aktiver_schritt:
+        gezeigt = aktiver_schritt
+    else:
+        gezeigt = ids[0]
+
+    # ---- Ziffernleiste ----
+    with gr.Row(elem_classes=["schrittleiste"]):
+        for s in schritte:
+            klassen = ["schritt-nr"]
+            if s["id"] == aktiver_schritt:
+                klassen.append("nr-hier")
+            if s["id"] == gezeigt:
+                klassen.append("nr-gezeigt")
+            beschriftung = str(s["order"])
+            if schritt_lage(s["id"])["offen"]:
+                beschriftung += "•"
+            gr.Button(beschriftung, size="sm", scale=1, min_width=34,
+                      elem_classes=klassen).click(
+                lambda sid=s["id"]: sid, None, offener_schritt)
+
+    # ---- der angezeigte Schritt ----
+    s = [x for x in schritte if x["id"] == gezeigt][0]
+    gr.Markdown(
+        f"<div style='font-weight:600; margin:0.1em 0 0.4em 0; "
+        f"color:var(--akzent,#4f46e5);'>{s['order']} · {s['name']}</div>",
+        container=False,
+    )
+
+    chats = db.chats_holen(s["id"])
+    if not chats:
+        gr.Markdown("*(noch kein Chat)*", container=False)
+
+    for c in chats:
+        with gr.Row():
+            btn = gr.Button(
+                c["title"][:40], size="sm", scale=5,
+                elem_classes=["artefakt-zeile"]
+                + (["chat-aktiv"] if c["id"] == chat_id else []),
+            )
+            del_btn = gr.Button("✕", size="sm", scale=0, min_width=32)
+
+        btn.click(lambda cid=c["id"], sid=s["id"]: (cid, sid),
+                  None, [aktueller_chat, offener_schritt])
+        del_btn.click(
+            lambda aktiv, z, cid=c["id"], sid=s["id"]:
+                chat_loeschen_ui(cid, sid, aktiv, z),
+            [aktueller_chat, sidebar_stand],
+            [aktueller_chat, offener_schritt, sidebar_stand],
+        )
+
+    gr.Button("＋ Chat", size="sm").click(
+        lambda sid=s["id"]: chat_anlegen_ui(sid),
+        None, [aktueller_chat, offener_schritt],
+    )
+
+    primaer = db.artefakte_von_schritt_primaer(s["id"])
+    weitere = db.artefakte_von_schritt_folgend(s["id"])
+    if primaer or weitere:
+        gr.Markdown(TRENNER, container=False)
+        for a in primaer:
+            artefakt_zeile(a)
+        for a in weitere:
+            artefakt_zeile(a, ausgegraut=True)
+
 
 def artefakt_erstellen_ui(chat_id, titel, typ, scope):
     if chat_id is None:
         gr.Warning("Bitte zuerst einen Chat öffnen.")
-        return gr.skip(), gr.skip()
+        return gr.skip()
     if not titel.strip():
         gr.Warning("Bitte einen Titel eingeben.")
-        return gr.skip(), gr.skip()
+        return gr.skip()
 
     ort = db.projekt_von_chat(chat_id)
     schritt = db.schritt_von_chat(chat_id)
@@ -418,7 +513,7 @@ def artefakt_erstellen_ui(chat_id, titel, typ, scope):
     db.artefakt_schritt_zuordnen(artefakt_id, ort["step_id"])
 
     gr.Info("Artefakt als Entwurf angelegt – bitte im Dokumentfenster prüfen.")
-    return "", True     # Titelfeld leeren, Regal aufklappen
+    return ""     # Titelfeld leeren
 
 
 def artefakt_finden(chat_id, titel):
@@ -713,8 +808,9 @@ def freigabe_kopf(artefakt_id):
     stand = ("noch nie freigegeben" if not lage["freigegeben_v"]
              else f"zuletzt freigegeben: v{lage['freigegeben_v']}")
     extra = chip(stand)
-    extra += (chip(f"❗ {offen} offene Prüfpunkte", "chip-offen") if offen
-              else chip("✓ alle Prüfpunkte geklärt", "chip-frei"))
+    extra += (chip(f"❗ {offen} offene Prüfpunkte", STUFEN_FARBE["geaendert"])
+              if offen else chip("✓ alle Prüfpunkte geklärt",
+                                 STUFEN_FARBE["frei"]))
     return (f"## Freigabe: {lage['symbol']} {lage['titel']}\n"
             + status_chips(lage, extra))
 
@@ -837,7 +933,8 @@ def dokument_hinweis(artefakt_id):
 
 
 # ---------- Hauptseite ----------
-with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor") as forschungs_app:
+with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor",
+               fill_width=True) as forschungs_app:
     gr.Navbar(visible=False)
 
     # States
@@ -846,7 +943,6 @@ with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor") as forschungs_app:
     sidebar_stand = gr.State(0)
     aktueller_chat = gr.State(None)
     stand = gr.State("")
-    regal_offen = gr.State(False)
     entwuerfe = gr.State({})
 
     # Components
@@ -875,103 +971,26 @@ with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor") as forschungs_app:
             @gr.render(inputs=[aktuelles_projekt, aktueller_chat,
                                offener_schritt, sidebar_stand])
             def zeige_schritte(projekt_id, chat_id, offen_id, _stand):
+                try:
+                    schritte_zeichnen(projekt_id, chat_id, offen_id)
+                except Exception as fehler:
+                    traceback.print_exc()
+                    gr.Markdown(f"⚠️ Fehler in der Seitenleiste: "
+                                f"`{type(fehler).__name__}: {fehler}`")
+
+            @gr.render(inputs=[aktuelles_projekt, stand])
+            def zeige_regal(projekt_id, _stand):
                 if projekt_id is None:
-                    gr.Markdown("*Bitte oben ein Projekt wählen.*")
                     return
-
-                schritte = db.schritte_holen(projekt_id)
-                if not schritte:
+                verwaist = artefakte_ohne_schritt(projekt_id)
+                if not verwaist:
                     return
-
-                # Wo steht das Gespräch gerade?
-                aktiver_schritt = None
-                if chat_id is not None:
-                    s_akt = db.schritt_von_chat(chat_id)
-                    if s_akt:
-                        aktiver_schritt = s_akt["id"]
-
-                # Welcher Schritt wird angezeigt?
-                ids = [s["id"] for s in schritte]
-                gezeigt = offen_id if offen_id in ids else (
-                    aktiver_schritt or ids[0])
-
-                # ---- Ziffernleiste ----
-                with gr.Row(elem_classes=["schrittleiste"]):
-                    for s in schritte:
-                        klassen = ["schritt-nr"]
-                        if s["id"] == aktiver_schritt:
-                            klassen.append("nr-hier")
-                        if s["id"] == gezeigt:
-                            klassen.append("nr-gezeigt")
-                        beschriftung = str(s["order"])
-                        if schritt_lage(s["id"])["offen"]:
-                            beschriftung += "•"
-                        nr_btn = gr.Button(beschriftung, size="sm", scale=1,
-                                           min_width=34, elem_classes=klassen)
-                        nr_btn.click(lambda sid=s["id"]: sid,
-                                     None, offener_schritt)
-
-                # ---- der angezeigte Schritt ----
-                s = next(x for x in schritte if x["id"] == gezeigt)
-                gr.Markdown(f"#### {s['order']} · {s['name']}", container=False)
-
-                chats = db.chats_holen(s["id"])
-                if not chats:
-                    gr.Markdown("*(noch kein Chat)*", container=False)
-
-                for c in chats:
-                    with gr.Row():
-                        btn = gr.Button(
-                            c["title"], size="sm", scale=5,
-                            elem_classes=["artefakt-zeile"]
-                            + (["chat-aktiv"] if c["id"] == chat_id else []),
-                        )
-                        del_btn = gr.Button("✕", size="sm", scale=0,
-                                            min_width=32)
-
-                    btn.click(
-                        lambda cid=c["id"], sid=s["id"]: (cid, sid),
-                        None, [aktueller_chat, offener_schritt],
-                    )
-                    del_btn.click(
-                        lambda aktiv, z, cid=c["id"], sid=s["id"]:
-                            chat_loeschen_ui(cid, sid, aktiv, z),
-                        [aktueller_chat, sidebar_stand],
-                        [aktueller_chat, offener_schritt, sidebar_stand],
-                    )
-
-                gr.Button("＋ Chat", size="sm").click(
-                    lambda sid=s["id"]: chat_anlegen_ui(sid),
-                    None, [aktueller_chat, offener_schritt],
-                )
-
-                primaer = db.artefakte_von_schritt_primaer(s["id"])
-                weitere = db.artefakte_von_schritt_folgend(s["id"])
-                if primaer or weitere:
-                    gr.Markdown(TRENNER, container=False)
-                    for a in primaer:
-                        artefakt_zeile(a)
-                    for a in weitere:
-                        artefakt_zeile(a, ausgegraut=True)
-
-            # Artefaktregal
-            gr.Markdown("### Artefakte")
-
-            # Artefaktregal - Components
-            regal_btn = gr.Button("🌐 Projektweite Artefakte")
-
-            # Artefaktregal - Renders
-            @gr.render(inputs=[aktuelles_projekt, regal_offen, stand])
-            def zeige_regal(projekt_id, offen, _stand):
-                if not offen or projekt_id is None:
-                    return
-                alle = db.artefakte_aus_projekt_holen(projekt_id)
-                projektweit = [a for a in alle if a["scope"] == "project"]
-                if projektweit:
-                    for a in projektweit:
-                        artefakt_zeile(a)
-                else:
-                    gr.Markdown("*(keine projektweiten Artefakte)*")
+                gr.Markdown(TRENNER, container=False)
+                gr.Markdown("<span style='font-size:0.78em; "
+                            "color:var(--body-text-color-subdued,#6d6b66);'>"
+                            "Ohne Schritt</span>", container=False)
+                for a in verwaist:
+                    artefakt_zeile(a)
 
         # Chatbot
         with gr.Column(scale=3):
@@ -1011,7 +1030,6 @@ with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor") as forschungs_app:
         [eingabe, aktueller_chat, sidebar_stand],
         [eingabe, chatbot, sidebar_stand],
     ).then(entwurf_loeschen, [aktueller_chat, entwuerfe], entwuerfe)
-    regal_btn.click(lambda offen: not offen, regal_offen, regal_offen)
     
 
     # alle zwei Sekunden wird automatisch ein tick-Event gestartet
