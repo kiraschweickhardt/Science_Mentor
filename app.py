@@ -159,9 +159,11 @@ def artefakt_zeile(a, ausgegraut=False):
         elem_classes=["artefakt-zeile"] + (["schwach"] if ausgegraut else []),
     )
     btn.click(None, js=f"() => window.open('/doc?id={a['id']}', '_blank')")
+    offen = len(db.offene_vorschlaege(a["id"]))
     gr.Markdown(
         f"<span class='meta'>{freigabe} · {AUTOR_TEXT.get(autor, autor)} "
-        f"· v{a['current_version']}</span>",
+        f"· v{a['current_version']}"
+        + (f" · 💡{offen}" if offen else "") + "</span>",
         container=False,
     )
 
@@ -188,74 +190,76 @@ def artefakt_erstellen_ui(chat_id, titel, typ, scope):
     return "", True     # Titelfeld leeren, Regal aufklappen
 
 
-def artefakt_waehlen_ui(chat_id, artefakt_id, zaehler):
-    db.aktives_artefakt_setzen(chat_id, artefakt_id)
-    if artefakt_id:
-        titel = db.artefakt_holen(artefakt_id)["title"]
-        db.systemzeile(chat_id, f"ab hier: {titel}")
-    return zaehler + 1
+def artefakt_finden(chat_id, titel):
+    """Sucht ein Artefakt des Projekts anhand seines Titels."""
+    ort = db.projekt_von_chat(chat_id)
+    alle = db.artefakte_aus_projekt_holen(ort["project_id"])
+    gesucht = (titel or "").strip()
+    if not gesucht:
+        return None
+
+    for a in alle:                                  # exakt (Groß/Klein egal)
+        if a["title"].lower() == gesucht.lower():
+            return a
+
+    nach_titel = {a["title"]: a for a in alle}      # sonst der ähnlichste
+    nah = difflib.get_close_matches(gesucht, list(nach_titel), n=1, cutoff=0.5)
+    return nach_titel[nah[0]] if nah else None
 
 
-def vorschlag_ausloesen(chat_id):
-    aktiv_id = db.aktives_artefakt_holen(chat_id)
-    if aktiv_id is None:
-        gr.Warning("Bitte zuerst ein Artefakt auswählen.")
-        return
+def titelliste(chat_id):
+    ort = db.projekt_von_chat(chat_id)
+    return ", ".join(f"„{a['title']}“"
+                     for a in db.artefakte_aus_projekt_holen(ort["project_id"]))
 
-    a = db.artefakt_holen(aktiv_id)
-    v = db.aktuelle_version_holen(aktiv_id)      # frisch aus der DB
-    schritt = db.schritt_von_chat(chat_id)
-    experte = experten.experte_fuer(schritt["order"])
-    typ_info = artefakte.typ_holen(a["art_key"])
 
-    # Wer hat welchen Abschnitt zuletzt geändert?
-    autoren = {k: AUTOR_TEXT.get(v, v)
-               for k, v in db.abschnitts_autoren(aktiv_id, a["type"]).items()}
+def stil_hinweis(artefakt_id, typ, art_key):
+    """Hinweise zum Umgang mit diesem Dokument – hängt an artefakt_lesen."""
+    teile = []
 
-    # Prompt-Zusatz
-    zusatz = typ_info.prompt_zusatz if typ_info else ""
-    wortwahl = db.wortwahl_holen(aktiv_id)
+    typ_info = artefakte.typ_holen(art_key)
+    if typ_info and typ_info.prompt_zusatz:
+        teile.append(typ_info.prompt_zusatz)
+
+    wortwahl = db.wortwahl_holen(artefakt_id)
     if wortwahl:
-        zusatz += ("\n\nDiese Wortwahl hat die forschende Person selbst gesetzt. "
-                   "Behalte sie bei:\n"
-                   + "\n".join(f"- „{nach}“ (nicht „{von}“)"
-                               for von, nach in wortwahl))
+        teile.append("Diese Wortwahl hat die forschende Person selbst gesetzt. "
+                     "Behalte sie bei:\n"
+                     + "\n".join(f"- „{nach}“ (nicht „{von}“)"
+                                 for von, nach in wortwahl))
 
-    ergebnis = experte.vorschlag_erstellen(
-        db.verlauf_fuer_openai(chat_id), a["title"], v["content"],
-        autoren, zusatz if typ_info else "",
-    )
+    eigene = [k for k, w in db.abschnitts_autoren(artefakt_id, typ).items()
+              if w == "human"]
+    if eigene:
+        teile.append("Selbst geschrieben hat sie: "
+                     + ", ".join(f"„{k}“" for k in eigene)
+                     + ". Diese Abschnitte darfst du überarbeiten, aber ändere "
+                       "ihre Formulierungen nicht ohne inhaltlichen Grund.")
 
-    alt_teile = abschnitte.zerlegen(v["content"], a["type"])
-    for t in ergebnis["teile"]:
-        t["alt"] = alt_teile.get(t["abschnitt"], "")
-
-    db.vorschlag_anlegen(aktiv_id, a["current_version"], chat_id,
-                         ergebnis["summary"], ergebnis["teile"])
-    db.systemzeile(chat_id, f"Vorschlag für {a['title']} erstellt "
-                            f"({len(ergebnis['teile'])} Abschnitte)")
-    gr.Info("Vorschlag erstellt – im Dokumentfenster prüfen.")
-
+    if not teile:
+        return ""
+    return "\n\n---\nHinweise:\n" + "\n\n".join(teile)
 
 
 def regal_hinweis(chat_id):
-    """Kurze Übersicht aller Artefakte für den Systemkontext."""
+    """Überblick über Schritt und Dokumente für den Systemkontext."""
     ort = db.projekt_von_chat(chat_id)
-    aktiv_id = db.aktives_artefakt_holen(chat_id)
+    schritt = db.schritt_von_chat(chat_id)
+
+    hier = {a["id"] for a in db.artefakte_von_schritt_primaer(ort["step_id"])}
+    hier |= {a["id"] for a in db.artefakte_von_schritt_folgend(ort["step_id"])}
 
     zeilen = []
     for a in db.artefakte_aus_projekt_holen(ort["project_id"]):
         freigabe, autor = db.artefakt_zustand(a["id"])
-        marke = "  ← aktiv" if a["id"] == aktiv_id else ""
+        marke = "  ← gehört zu diesem Schritt" if a["id"] in hier else ""
         zeilen.append(f"- „{a['title']}“ ({a['type']}, v{a['current_version']}, "
                       f"{freigabe}){marke}")
 
-    text = "Dokumente in diesem Projekt:\n" + "\n".join(zeilen)
-    text += ("\n\nDen Inhalt holst du dir mit dem Werkzeug artefakt_lesen. "
-             "Änderungen vorschlagen kannst du nur für das aktive Dokument.")
-    if aktiv_id is None:
-        text += (" Aktuell ist keines aktiv – bitte die Person, oben eines "
-                 "auszuwählen, bevor du etwas vorschlägst.")
+    text = (f"Arbeitsschritt {schritt['order']}: {schritt['name']}\n\n"
+            "Dokumente in diesem Projekt:\n" + "\n".join(zeilen)
+            + "\n\nInhalte holst du dir mit artefakt_lesen. Änderungen schlägst "
+              "du mit vorschlag_anlegen vor und nennst dabei immer den Titel.")
     return {"role": "system", "content": text}
 
 
@@ -270,52 +274,37 @@ def werkzeug_ausfuehren(chat_id, name, argumente):
 
 
 def wz_artefakt_lesen(chat_id, argumente):
-    ort = db.projekt_von_chat(chat_id)
-    alle = db.artefakte_aus_projekt_holen(ort["project_id"])
-    gesucht = (argumente.get("titel") or "").strip()
-
-    # 1. exakt (Groß/Klein egal)
-    treffer = next((a for a in alle
-                    if a["title"].lower() == gesucht.lower()), None)
-
-    # 2. sonst der ähnlichste Titel
-    if treffer is None:
-        nach_titel = {a["title"]: a for a in alle}
-        nah = difflib.get_close_matches(gesucht, list(nach_titel),
-                                        n=1, cutoff=0.5)
-        if nah:
-            treffer = nach_titel[nah[0]]
-
+    treffer = artefakt_finden(chat_id, argumente.get("titel"))
     if treffer is None:
         return ("Kein Dokument mit diesem Titel gefunden. Vorhanden sind: "
-                + ", ".join(f"„{a['title']}“" for a in alle))
+                + titelliste(chat_id))
 
     v = db.aktuelle_version_holen(treffer["id"])
     freigabe, autor = db.artefakt_zustand(treffer["id"])
     return (f"„{treffer['title']}“ · Version {treffer['current_version']} · "
             f"{freigabe} · zuletzt von {AUTOR_TEXT.get(autor, autor)}\n\n"
-            f"{v['content']}")
+            f"{v['content']}"
+            + stil_hinweis(treffer["id"], treffer["type"], treffer["art_key"]))
 
 
 def wz_vorschlag_anlegen(chat_id, argumente):
-    aktiv_id = db.aktives_artefakt_holen(chat_id)
-    if aktiv_id is None:
-        return ("Fehlgeschlagen: In diesem Chat ist kein Dokument aktiv. "
-                "Bitte die Person darum bitten, oben eines auszuwählen.")
+    a = artefakt_finden(chat_id, argumente.get("titel"))
+    if a is None:
+        return ("Fehlgeschlagen: Kein Dokument mit diesem Titel. Vorhanden sind: "
+                + titelliste(chat_id))
 
     teile = argumente.get("teile", [])
     if not teile:
         return "Fehlgeschlagen: keine Abschnitte angegeben."
 
-    a = db.artefakt_holen(aktiv_id)
-    v = db.aktuelle_version_holen(aktiv_id)        # immer frisch aus der DB
+    v = db.aktuelle_version_holen(a["id"])          # immer frisch aus der DB
     alt_teile = abschnitte.zerlegen(v["content"], a["type"])
 
     unbekannt = [t["abschnitt"] for t in teile if t["abschnitt"] not in alt_teile]
     for t in teile:
         t["alt"] = alt_teile.get(t["abschnitt"], "")
 
-    db.vorschlag_anlegen(aktiv_id, a["current_version"], chat_id,
+    db.vorschlag_anlegen(a["id"], a["current_version"], chat_id,
                          argumente.get("summary", ""), teile)
     db.systemzeile(chat_id, f"Vorschlag für {a['title']} erstellt "
                             f"({len(teile)} Abschnitte)")
@@ -708,53 +697,6 @@ with gr.Blocks(css=CSS) as forschungs_app:
                 )
                 senden_btn = gr.Button("➤", variant="primary", scale=1, min_width=10)
 
-            # Artefakt-Anzeige (Chip)
-            @gr.render(inputs=[aktueller_chat, sidebar_stand])
-            def zeige_chip(chat_id, _stand):
-                if chat_id is None:
-                    return
-
-                ort = db.projekt_von_chat(chat_id)
-                aktiv_id = db.aktives_artefakt_holen(chat_id)
-                alle = db.artefakte_aus_projekt_holen(ort["project_id"])
-
-                auswahl = [("— kein Artefakt —", None)] + [
-                    (a["title"], a["id"]) for a in alle
-                ]
-
-                # --- eine Zeile: Auswahl + Aktion ---
-                with gr.Row():
-                    art_wahl = gr.Dropdown(
-                        choices=auswahl, value=aktiv_id,
-                        show_label=False, container=False, scale=3,
-                    )
-                    vorschlag_btn = gr.Button(
-                        "✏️ Änderungen vorschlagen", size="sm", scale=1,
-                        interactive=(aktiv_id is not None),
-                    )
-
-                # --- Wires für die eben erzeugten Komponenten ---
-                art_wahl.change(
-                    lambda aid, z, cid=chat_id: (
-                        artefakt_waehlen_ui(cid, aid, z),
-                        verlauf_laden(cid),
-                    ),
-                    [art_wahl, sidebar_stand],
-                    [sidebar_stand, chatbot],
-                )
-                vorschlag_btn.click(
-                    lambda z, cid=chat_id: (
-                        vorschlag_ausloesen(cid),
-                        z + 1,
-                        verlauf_laden(cid),
-                    )[1:],
-                    sidebar_stand,
-                    [sidebar_stand, chatbot],
-                )
-
-                if aktiv_id is None:
-                    return
-
 
     # Wires
     # Seite laden
@@ -813,8 +755,8 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
 
         for v in offene:
             with gr.Group():
-                gr.Markdown(f"### 💡 Vorschlag aus Chat · {v['ts'][:16]}\n"
-                            f"{v['summary']}")
+                gr.Markdown(f"### 💡 Vorschlag aus {db.chat_kurz(v['chat_id'])}"
+                            f" · {v['ts'][:16]}\n{v['summary']}")
                 gewaehlt = []
 
                 for t in db.vorschlag_teile(v["id"]):

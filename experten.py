@@ -12,33 +12,6 @@ client = OpenAI(
     base_url="https://gpt.uni-muenster.de/v1",   # None = Standard-Endpunkt
 )
 
-VORSCHLAG_SCHEMA = {
-    "name": "vorschlag",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "summary": {"type": "string"},
-            "teile": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "abschnitt": {"type": "string"},
-                        "art": {"type": "string", "enum": ["aenderung", "kommentar"]},
-                        "neu": {"type": "string"},
-                        "begruendung": {"type": "string"},
-                    },
-                    "required": ["abschnitt", "art", "neu", "begruendung"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": ["summary", "teile"],
-        "additionalProperties": False,
-    },
-}
-
 PRUEFPUNKT_SCHEMA = {
     "name": "pruefpunkte",
     "strict": True,
@@ -236,39 +209,6 @@ class Experte:
         )
         return antwort.choices[0].message.content
 
-    def vorschlag_erstellen(self, verlauf, artefakt_titel, inhalt,
-                            abschnitts_autoren, prompt_zusatz=""):
-        autoren = "\n".join(
-            f"- {a}: zuletzt geändert von {w}" for a, w in abschnitts_autoren.items()
-        )
-        auftrag = (
-            f"Erarbeite Änderungsvorschläge für das Dokument „{artefakt_titel}“.\n\n"
-            f"{prompt_zusatz}\n\n"
-            f"Aktueller Stand:\n---\n{inhalt}\n---\n\n"
-            f"Bearbeitungsstand der Abschnitte:\n{autoren}\n\n"
-            "Regeln:\n"
-            "- Schlage nur Abschnitte vor, die wirklich Änderung brauchen.\n"
-            "- Du darfst jeden Abschnitt überarbeiten, auch selbst geschriebene "
-            "der Person.\n"
-            "- Respektiere aber ihre Wortwahl: Begriffe, Schreibweisen, Gendern, "
-            "Zitationsstil und Ton bleiben unverändert. Ändere nichts allein aus "
-            "stilistischen Gründen und mache keine ihrer Formulierungs"
-            "entscheidungen rückgängig.\n"
-            "- Hältst du eine solche Entscheidung für inhaltlich problematisch, "
-            "ändere sie nicht, sondern gib art='kommentar'.\n"
-            "- Gib bei art='aenderung' in 'neu' den vollständigen neuen "
-            "Abschnittstext (ohne Überschrift).\n"
-            "- Begründe jeden Teil in einem Satz."
-        )
-        antwort = client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": self.system_prompt}]
-                     + verlauf
-                     + [{"role": "user", "content": auftrag}],
-            temperature=self.temperature,
-            response_format={"type": "json_schema", "json_schema": VORSCHLAG_SCHEMA},
-        )
-        return json.loads(antwort.choices[0].message.content)
 
 
 class HypothesenExperte(Experte):

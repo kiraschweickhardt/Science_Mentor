@@ -50,12 +50,11 @@ def init_db():
     );
 
     CREATE TABLE IF NOT EXISTS chats (
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        step_id          INTEGER NOT NULL,
-        title            TEXT NOT NULL,
-        aktives_produkt  INTEGER,
-        kind             TEXT NOT NULL DEFAULT 'step',
-        product_id       INTEGER,
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        step_id     INTEGER NOT NULL,
+        title       TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'step',
+        product_id  INTEGER,
         FOREIGN KEY (step_id) REFERENCES steps(id)
     );
 
@@ -547,6 +546,20 @@ def chats_holen(step_id):
     return zeilen
 
 
+def chat_kurz(chat_id):
+    """Schritt und Titel eines Chats – für Herkunftsangaben."""
+    if chat_id is None:
+        return "unbekannt"
+    conn = verbindung()
+    z = conn.execute(
+        """SELECT c.title, s."order" AS nr FROM chats c
+           JOIN steps s ON s.id = c.step_id WHERE c.id = ?""",
+        (chat_id,)
+    ).fetchone()
+    conn.close()
+    return f"Schritt {z['nr']} · {z['title']}" if z else "gelöschter Chat"
+
+
 def verlauf_holen(chat_id):
     conn = verbindung()
     zeilen = conn.execute(
@@ -927,67 +940,10 @@ def schritte_von_artefakt(artefakt_id):
     return zeilen
 
 
-# Artefakt zum Bearbeiten auswählen (aus Chat heraus)
-def aktives_artefakt_setzen(chat_id, artefakt_id):
-    conn = verbindung()
-    conn.execute(
-        "UPDATE chats SET aktives_produkt = ? WHERE id = ?",
-        (artefakt_id, chat_id)
-    )
-    conn.commit()
-    conn.close()
-
-# welches Artefakt wird im Chat aktuell bearbeitet?
-def aktives_artefakt_holen(chat_id):
-    conn = verbindung()
-    z = conn.execute(
-        "SELECT aktives_produkt FROM chats WHERE id = ?", (chat_id,)
-    ).fetchone()
-    conn.close()
-    return z["aktives_produkt"] if z else None
-
-# aus verschiedenen Chats heraus können dieselben Artefakte gleichzeitig bearbeitet werden
-def andere_chats_am_artefakt(artefakt_id, ausser_chat_id):
-    conn = verbindung()
-    zeilen = conn.execute(
-        """SELECT c.id, c.title, s."order" AS nr FROM chats c
-           JOIN steps s ON s.id = c.step_id
-           WHERE c.aktives_produkt = ? AND c.id != ?""",
-        (artefakt_id, ausser_chat_id)
-    ).fetchall()
-    conn.close()
-    return zeilen
-
 # --------------------------------------------------------------------------
-# Demo anlegen
+# Datenbank zurücksetzen
 # --------------------------------------------------------------------------
-
-
-def demo_daten():
-    """Legt einen kleinen, nachvollziehbaren Startzustand an."""
-    pid = projekt_anlegen("Schlafstudie")
-
-    schritte = schritte_holen(pid)   # in demo_daten: schritte_holen(pid)
-    s1 = schritte[0]["id"]
-
-    # Ein Chat im ersten Schritt, mit etwas Verlauf
-    c1 = chat_anlegen(s1, "Erste Ideen")
-    nachricht_speichern(c1, "user", "Ich will etwas zu Schlafqualität machen.")
-    nachricht_speichern(c1, "assistant", "Bei welcher Zielgruppe denn?")
-
-    # Ein schrittspezifisches Artefakt in Schritt 1
-    p_frage = artefakt_anlegen(pid, "text", "Forschungsfrage", "Wie hängt ...?")
-    artefakt_schritt_zuordnen(p_frage, s1)
-
-    # Ein schrittübergreifendes Artefakt (Schritt 1 und 2)
-    p_glossar = artefakt_anlegen(pid, "text", "Glossar", "Begriffe ...", scope="project")
-    artefakt_schritt_zuordnen(p_glossar, s1)
-
-    print(f"Demo-Daten angelegt (Projekt-ID {pid}).")
-    return pid
-
 
 
 if __name__ == "__main__":
     datenbank_zuruecksetzen()
-    demo_daten()
