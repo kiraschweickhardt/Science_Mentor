@@ -381,6 +381,19 @@ def schritt_lage(step_id):
     return {"offen": offen}
 
 
+## Warnung vor Bearbeiten von Artefakten, die nicht dem eigenen Schritt zugeordnet sind (verlassen eigenes Feld der Expertise)
+def fremder_schritt(chat_id, artefakt_id):
+    """'' wenn das Dokument zu diesem Schritt gehört, sonst der zuständige."""
+    ort = db.projekt_von_chat(chat_id)
+    hier = {a["id"] for a in db.artefakte_von_schritt_primaer(ort["step_id"])}
+    hier |= {a["id"] for a in db.artefakte_von_schritt_folgend(ort["step_id"])}
+    if artefakt_id in hier:
+        return ""
+    schritte = db.schritte_von_artefakt(artefakt_id)
+    return (f"{schritte[0]['order']} · {schritte[0]['name']}"
+            if schritte else "keinem Schritt")
+
+
 def editor_sperre(id_text):
     """Sperrt Editor, Speichern und Freigabe, solange Vorschläge offen sind."""
     if not id_text:
@@ -487,10 +500,11 @@ def schritte_zeichnen(projekt_id, chat_id, offen_id):
     weitere = db.artefakte_von_schritt_folgend(s["id"])
     if primaer or weitere:
         gr.Markdown(TRENNER, container=False)
-        for a in primaer:
-            artefakt_zeile(a)
-        for a in weitere:
-            artefakt_zeile(a, ausgegraut=True)
+        gemischt = ([(a, False) for a in primaer]
+                    + [(a, True) for a in weitere])
+        gemischt.sort(key=lambda paar: paar[0]["id"])
+        for a, blass in gemischt:
+            artefakt_zeile(a, ausgegraut=blass)
 
 
 def artefakt_erstellen_ui(chat_id, titel, typ, scope):
@@ -620,7 +634,12 @@ def wz_artefakt_lesen(chat_id, argumente):
 
     v = db.aktuelle_version_holen(treffer["id"])
     lage = artefakt_lage(treffer["id"])
-    return (f"„{lage['titel']}“ · {status_klartext(lage)}\n\n"
+    fremd = fremder_schritt(chat_id, treffer["id"])
+    hinweis = (f"\n\n(Dieses Dokument gehört zu Schritt {fremd}. Du darfst es "
+               "lesen und kommentieren, bist aber nicht der zuständige "
+               "Experte – sage das der Person, bevor du Änderungen "
+               "vorschlägst.)") if fremd else ""
+    return (f"„{lage['titel']}“ · {status_klartext(lage)}{hinweis}\n\n"
             f"{v['content']}"
             + stil_hinweis(treffer["id"], treffer["type"], treffer["art_key"]))
 
@@ -668,6 +687,15 @@ def wz_vorschlag_anlegen(chat_id, argumente):
         rueck += (f" Achtung: {', '.join(unbekannt)} passt zu keiner vorhandenen "
                   f"Überschrift und wird als neuer Abschnitt ans Ende gestellt. "
                   f"Vorhanden sind: {', '.join(vorhandene)}.")
+    fremd = fremder_schritt(chat_id, a["id"]) # gehört das Artefakt gar nicht in den eigenen Expertisebereich? dann Warnung!
+    if fremd:
+        gr.Warning(f"„{a['title']}“ gehört zu Schritt {fremd} – "
+                   f"dort sitzt der zuständige Experte.")
+        db.systemzeile(chat_id, f"⚠️ Schrittübergreifend bearbeitet: "
+                                f"„{a['title']}“ gehört zu Schritt {fremd}")
+        rueck += (f" Wichtig: Dieses Dokument gehört zu Schritt {fremd}, nicht "
+                  "zu deinem. Weise die Person ausdrücklich darauf hin, dass "
+                  "sie den Vorschlag besser mit dem dortigen Experten prüft.")
     return rueck
 
 
@@ -703,6 +731,87 @@ def vorschlaege_offen(artefakt_id):
 def kopfzeile_bauen(artefakt_id):
     lage = artefakt_lage(artefakt_id)
     return f"## {lage['symbol']} {lage['titel']}\n" + status_chips(lage)
+
+
+CODE_SPRACHE = {"analysecode": "r"}      # art_key → Sprache für gr.Code
+
+
+def tabelle_lesen(text):
+    """Markdown-Tabelle → (Kopfzeile, Zeilen). None, wenn keine da ist."""
+    zeilen = [z.strip() for z in text.splitlines() if z.strip().startswith("|")]
+    if len(zeilen) < 2:
+        return None
+
+    def spalten(z):
+        return [t.strip() for t in z.strip("|").split("|")]
+
+    kopf = spalten(zeilen[0])
+    rest = []
+    for z in zeilen[1:]:
+        nackt = z.replace("|", "").replace(" ", "")
+        if nackt and set(nackt) <= set("-:"):      # Trennzeile überspringen
+            continue
+        r = spalten(z)
+        rest.append((r + [""] * len(kopf))[:len(kopf)])
+    return kopf, rest
+
+
+def vorschau_bauen(id_text, text):
+    """Zeigt je nach Artefakttyp Markdown, Code oder Tabelle."""
+    aus = (gr.update(visible=False),) * 3
+    if not id_text:
+        return aus
+    a = db.artefakt_holen(int(id_text))
+
+    if a["type"] == "code":
+        sprache = CODE_SPRACHE.get(a["art_key"], "r")
+        return (gr.update(visible=False),
+                gr.update(value=text, language=sprache, visible=True),
+                gr.update(visible=False))
+
+    if a["type"] == "tabelle":
+        gelesen = tabelle_lesen(text or "")
+        if gelesen:
+            kopf, reihen = gelesen
+            return (gr.update(visible=False), gr.update(visible=False),
+                    gr.update(value=reihen, headers=kopf, visible=True))
+
+    return (gr.update(value=text, visible=True),
+            gr.update(visible=False), gr.update(visible=False))
+
+
+def kopie_html(id_text, text):
+    """HTML-Fassung für die Zwischenablage – nötig, wo es keine Vorschau gibt."""
+    if not id_text:
+        return ""
+    a = db.artefakt_holen(int(id_text))
+    if a["type"] != "tabelle":
+        return ""
+    gelesen = tabelle_lesen(text or "")
+    if not gelesen:
+        return ""
+    kopf, reihen = gelesen
+    aus = ["<table border='1' cellspacing='0' cellpadding='4'><tr>"
+           + "".join(f"<th>{k}</th>" for k in kopf) + "</tr>"]
+    for r in reihen:
+        aus.append("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>")
+    return "".join(aus) + "</table>"
+
+
+def kopiernotiz(id_text):
+    """Vermerk, der freigegebenen Dokumenten NICHT vorangestellt wird."""
+    if not id_text:
+        return ""
+    lage = artefakt_lage(int(id_text))
+    if lage["stufe"] == "frei":
+        return ""                      # freigegeben: saubere Kopie
+    text = (f"Entwurf – {lage['titel']}, Version {lage['version']}, "
+            f"{lage['freigabe']}, zuletzt bearbeitet: {lage['autor_text']}.")
+    a = db.artefakt_holen(int(id_text))
+    if a["type"] == "code":
+        text = "# " + text
+    return text
+
 
 # updatet regelmäßig (vgl. puls-Funktion für Hauptseite)
 def doc_puls(id_text, alter_stand):
@@ -969,8 +1078,8 @@ with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor",
 
             # Renders (für Schritte)
             @gr.render(inputs=[aktuelles_projekt, aktueller_chat,
-                               offener_schritt, sidebar_stand])
-            def zeige_schritte(projekt_id, chat_id, offen_id, _stand):
+                               offener_schritt, sidebar_stand, stand])
+            def zeige_schritte(projekt_id, chat_id, offen_id, _zaehler, _stand):
                 try:
                     schritte_zeichnen(projekt_id, chat_id, offen_id)
                 except Exception as fehler:
@@ -994,7 +1103,7 @@ with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor",
 
         # Chatbot
         with gr.Column(scale=3):
-            chatbot = gr.Chatbot(height=400)
+            chatbot = gr.Chatbot(height=500)
 
             # Eingabezeile mit Senden-Button
             with gr.Row():
@@ -1049,6 +1158,8 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     gezeigte_version = gr.State(None)  # welche alte Version ist aufgeklappt?
 
     id_box = gr.Textbox(visible=False)     # Zwischenspeicher für die ID
+    kopf_zeile = gr.Textbox(visible=False) # Stempel für die Kopie
+    kopie_box = gr.Textbox(visible=False)   # HTML-Fassung für die Kopie
     kopf = gr.Markdown(elem_id="dok_kopf")
 
 
@@ -1132,7 +1243,11 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     # Selbst Änderungen vornehmen
     with gr.Tabs():
         with gr.Tab("Lesen"):
-            vorschau = gr.Markdown()
+            vorschau = gr.Markdown(elem_id="dok_vorschau")
+            vorschau_code = gr.Code(visible=False, show_label=False,
+                                    interactive=False)
+            vorschau_tabelle = gr.Dataframe(visible=False, show_label=False,
+                                            wrap=True, interactive=False)
         with gr.Tab("Bearbeiten"):
             inhalt = gr.Textbox(lines=20, show_label=False, container=False)
     with gr.Row():
@@ -1140,6 +1255,31 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
         kopieren_btn = gr.Button("📋 Kopieren")
         freigabe_btn = gr.Button("✅ Freigabe vorbereiten")
     meldung = gr.Markdown()
+
+
+    # einzelne Abschnitte kopieren (sinnvoll z.B. für Präregistrierung)
+    with gr.Accordion("📋 Einzelne Abschnitte kopieren", open=False):
+
+        @gr.render(inputs=[id_box, doc_stand])
+        def zeige_abschnitte(id_text, _stand):
+            if not id_text:
+                return
+            aid = int(id_text)
+            a = db.artefakt_holen(aid)
+            v = db.aktuelle_version_holen(aid)
+
+            for titel, text in abschnitte.zerlegen(v["content"], a["type"]).items():
+                if not text.strip():
+                    continue
+                with gr.Row():
+                    gr.Markdown(f"**{titel}**", container=False)
+                    feld = gr.Textbox(value=text, visible=False)
+                    btn = gr.Button("📋", size="sm", scale=0, min_width=44)
+                btn.click(
+                    None, feld, meldung,
+                    js="(t) => { navigator.clipboard.writeText(t);"
+                       " return '📋 Abschnitt kopiert.'; }",
+                )
 
     # Historie anzeigen lassen
     with gr.Accordion("🕘 Versionen", open=False):
@@ -1229,11 +1369,38 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
            " const h = document.querySelector('#dok_kopf h2');"
            " if (h) document.title = h.textContent.trim(); }, 50)",
     )
-    inhalt.change(lambda t: t, inhalt, vorschau)
+    kopf.change(kopiernotiz, id_box, kopf_zeile)
+    inhalt.change(vorschau_bauen, [id_box, inhalt],
+                  [vorschau, vorschau_code, vorschau_tabelle])
+    inhalt.change(kopie_html, [id_box, inhalt], kopie_box)
     kopieren_btn.click(
-        None, inhalt, meldung,
-        js="(t) => { navigator.clipboard.writeText(t);"
-           " return '📋 In die Zwischenablage kopiert.'; }",
+        None, [inhalt, kopf_zeile, kopie_box], meldung,
+        js="""(t, notiz, extra) => {
+            const el = document.querySelector('#dok_vorschau');
+            const sichtbar = el ? el.innerText.trim() : '';
+            let html = sichtbar ? el.innerHTML.trim() : (extra || '');
+            let text = t || '';
+            if (notiz) {
+                if (html) html = '<p><em>' + notiz + '</em></p>' + html;
+                text = notiz + '\\n\\n' + text;
+            }
+            if (!html) {
+                navigator.clipboard.writeText(text);
+                return '📋 Kopiert – als reiner Text.';
+            }
+            try {
+                const daten = new ClipboardItem({
+                    'text/html':  new Blob([html], {type: 'text/html'}),
+                    'text/plain': new Blob([text], {type: 'text/plain'})
+                });
+                navigator.clipboard.write([daten]).catch(
+                    () => navigator.clipboard.writeText(text));
+                return '📋 Kopiert – in Word wird daraus formatierter Text.';
+            } catch (e) {
+                navigator.clipboard.writeText(text);
+                return '📋 Kopiert – als reiner Text.';
+            }
+        }""",
     )
     speichern_btn.click(doc_speichern, [id_box, inhalt], [kopf, meldung])
     freigabe_btn.click(

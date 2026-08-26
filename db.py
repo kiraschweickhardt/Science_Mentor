@@ -182,13 +182,18 @@ def verlauf_fuer_openai(chat_id):
     ]
 
 def letzte_aenderung(project_id):
+    """Fingerabdruck des Projektstands: letzte Änderung + offene Vorschläge."""
     conn = verbindung()
     z = conn.execute(
-        "SELECT MAX(updated_at) AS stand FROM products WHERE project_id = ?",
-        (project_id,)
+        """SELECT (SELECT MAX(updated_at) FROM products
+                   WHERE project_id = ?) AS stand,
+                  (SELECT COUNT(*) FROM suggestions s
+                   JOIN products p ON p.id = s.product_id
+                   WHERE p.project_id = ? AND s.erledigt = 0) AS offen""",
+        (project_id, project_id)
     ).fetchone()
     conn.close()
-    return z["stand"] or ""
+    return f"{z['stand'] or ''}|{z['offen']}"
 
 def systemzeile(chat_id, text):
     nachricht_speichern(chat_id, "system", text)
@@ -898,7 +903,7 @@ def artefakte_von_schritt_primaer(step_id):
                  JOIN steps s2 ON s2.id = ps2.step_id
                  WHERE ps2.product_id = p.id
              )
-           ORDER BY p.title""",
+           ORDER BY p.id""",
         (step_id,)
     ).fetchall()
     conn.close()
@@ -918,7 +923,7 @@ def artefakte_von_schritt_folgend(step_id):
                  JOIN steps s2 ON s2.id = ps2.step_id
                  WHERE ps2.product_id = p.id
              )
-           ORDER BY p.title""",
+           ORDER BY p.id""",
         (step_id,)
     ).fetchall()
     conn.close()
