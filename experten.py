@@ -87,7 +87,11 @@ WERKZEUGE = [
                             "properties": {
                                 "abschnitt": {
                                     "type": "string",
-                                    "description": "Überschrift, exakt wie im Dokument.",
+                                    "description": "Überschrift des Abschnitts, "
+                                        "exakt wie im Dokument – ohne Doppelkreuze "
+                                        "und ohne Nummer. Nur eine hier nicht "
+                                        "vorhandene Überschrift erzeugt einen "
+                                        "neuen Abschnitt am Ende.",
                                 },
                                 "art": {
                                     "type": "string",

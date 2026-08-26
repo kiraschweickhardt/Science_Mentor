@@ -6,30 +6,147 @@ import artefakte
 import abschnitte
 import difflib
 
+
+
+# --------------------------------------------------------------------------
+# Theme
+# --------------------------------------------------------------------------
+
+THEMA = gr.themes.Base(
+    primary_hue=gr.themes.colors.indigo,
+    neutral_hue=gr.themes.colors.gray,
+    radius_size=gr.themes.sizes.radius_md,
+    font=("Segoe UI", "Helvetica Neue", "Helvetica", "Arial", "sans-serif"),
+    font_mono=("Menlo", "Consolas", "DejaVu Sans Mono", "monospace"),
+).set(
+    # Flächen
+    body_background_fill="#f7f5f1",
+    body_background_fill_dark="#14161a",
+    background_fill_primary="#fffdf9",
+    background_fill_primary_dark="#1b1e24",
+    background_fill_secondary="#f1eee8",
+    background_fill_secondary_dark="#22262e",
+    block_background_fill="#fffdf9",
+    block_background_fill_dark="#1b1e24",
+    # Kanten
+    border_color_primary="#e3ded4",
+    border_color_primary_dark="#2e333c",
+    block_border_width="1px",
+    block_shadow="none",
+    # Schrift
+    body_text_color="#1f2328",
+    body_text_color_dark="#e7e2d9",
+    body_text_color_subdued="#6d6b66",
+    body_text_color_subdued_dark="#99968e",
+    # Knöpfe
+    button_primary_background_fill="*primary_600",
+    button_primary_background_fill_hover="*primary_700",
+    button_primary_background_fill_dark="*primary_500",
+    button_primary_text_color="#ffffff",
+    button_secondary_background_fill="*neutral_100",
+    button_secondary_background_fill_dark="*neutral_800",
+    button_secondary_text_color="*body_text_color",
+    # Eingabefelder
+    input_background_fill="#ffffff",
+    input_background_fill_dark="#171a20",
+)
+
+
+
 # --------------------------------------------------------------------------
 # CSS
 # --------------------------------------------------------------------------
 
 
 CSS = """
-.schritt-aktiv > button {
-    background: #e8f0fe !important;
-    border-left: 4px solid #1a73e8 !important;
-    font-weight: 600 !important;
+/* eigene Statusfarben, je einmal für hell und dunkel */
+:root {
+    --status-arbeit:    #6d6b66;
+    --status-geaendert: #b45309;
+    --status-frei:      #15803d;
+    --herkunft-mensch:  #1f2328;
+    --herkunft-ki:      #4f46e5;
 }
-.chat-aktiv button {
-    background: #1a73e8 !important;
-    color: white !important;
+.dark {
+    --status-arbeit:    #99968e;
+    --status-geaendert: #f0b429;
+    --status-frei:      #4ade80;
+    --herkunft-mensch:  #e7e2d9;
+    --herkunft-ki:      #a5b4fc;
 }
 .artefakt-zeile button { text-align: left !important; }
-.schwach button { opacity: 0.6 !important; }
-.meta { font-size: 0.75em; color: #666; margin-left: 0.5em; }
-.trenner { margin: 0.6em 0 0.3em 0; border: none;
-           border-top: 1px solid #ddd; }
-.warnung { font-size: 0.8em; color: #b8860b; }
+.schwach button { opacity: 0.55 !important; }
+.meta {
+    font-size: 0.75em;
+    color: var(--body-text-color-subdued);
+    margin-left: 0.5em;
+}
+.trenner {
+    margin: 0.6em 0 0.3em 0;
+    border: none;
+    border-top: 1px solid var(--border-color-primary);
+}
+.warnung { font-size: 0.8em; color: var(--status-geaendert); }
+
+#seitenleiste {
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+    padding-right: 0.5em;
+}
+
+.schrittleiste { gap: 0.3em !important; margin-bottom: 0.5em; }
+.schritt-nr button {
+    padding: 0.3em 0 !important;
+    font-size: 0.85em !important;
+    font-weight: 600 !important;
+    border-radius: 999px !important;
+}
+.nr-hier button {
+    border: 1px solid var(--color-accent, #4f46e5) !important;
+    color: var(--color-accent, #4f46e5) !important;
+}
+.nr-gezeigt button {
+    background: var(--color-accent, #4f46e5) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+}
+
+/* Gradio-Fußzeile ausblenden */
+footer { display: none !important; }
+/* Seiten-Navigation der Mehrseiten-App ausblenden */
+nav.fillable { display: none !important; }
 """
+
+
+
 AUTOR_TEXT = {"system": "Vorlage", "ai": "KI", "human": "Mensch",
               "uebernommen": "KI, von dir angenommen"}
+
+TYP_SYMBOL = {"text": "📄", "code": "💻",
+              "tabelle": "🧮", "checklist": "☑️"}
+
+HERKUNFT_KLASSE = {"system": "neutral", "ai": "ki",
+                   "human": "mensch", "uebernommen": "ki"}
+
+STUFEN_FARBE = {
+    "arbeit":    "var(--status-arbeit, #6d6b66)",
+    "geaendert": "var(--status-geaendert, #b45309)",
+    "frei":      "var(--status-frei, #15803d)",
+}
+
+HERKUNFT_FARBE = {
+    "mensch":  "var(--herkunft-mensch, #1f2328)",
+    "ki":      "var(--herkunft-ki, #4f46e5)",
+    "neutral": None,
+}
+
+CHIP_BASIS = ("display:inline-block; font-size:0.72em; line-height:1.8; "
+              "padding:0 0.7em; margin:0 0.35em 0.25em 0; "
+              "border:1px solid; border-radius:999px; white-space:nowrap;")
+
+TRENNER = ("<hr style='margin:0.7em 0 0.4em 0; border:none; "
+           "border-top:1px solid var(--border-color-primary, #e3ded4);'>")
+
 
 # --------------------------------------------------------------------------
 # Funktionen
@@ -96,6 +213,15 @@ def verlauf_laden(chat_id):
     return aus
 
 
+def titel_saeubern(roh, grenze=45):
+    """Macht aus einer Modellantwort einen brauchbaren Chatnamen."""
+    text = (roh or "").strip().split("\n")[0]      # nur die erste Zeile
+    text = text.strip(" \"„“'*#:-").strip()        # Anführung, Markdown weg
+    if len(text) > grenze:
+        text = text[:grenze].rstrip() + "…"
+    return text or "Neuer Chat"
+
+
 def nachricht_senden(text, chat_id, zaehler):
     if chat_id is None:
         gr.Warning("Bitte links zuerst einen Chat auswählen.")
@@ -111,7 +237,9 @@ def nachricht_senden(text, chat_id, zaehler):
 
     # 2. Beim ersten Beitrag: Chat automatisch benennen
     if len(db.verlauf_holen(chat_id)) == 1:
-        db.chat_umbenennen(chat_id, experte.titel_vorschlagen(text))
+        db.chat_umbenennen(
+            chat_id, titel_saeubern(experte.titel_vorschlagen(text))
+        )
 
 
     # 3. Verlauf holen
@@ -146,26 +274,129 @@ def chat_merken(chat_id):
         if ort:
             db.letzten_chat_merken(ort["project_id"], chat_id)
 
+
+def entwurf_merken(text, chat_id, entwuerfe):
+    """Hält fest, was gerade in welchem Chat getippt wird."""
+    if chat_id is not None:
+        entwuerfe[chat_id] = text
+    return entwuerfe
+
+
+def entwurf_laden(chat_id, entwuerfe):
+    return entwuerfe.get(chat_id, "")
+
+
+def entwurf_loeschen(chat_id, entwuerfe):
+    entwuerfe.pop(chat_id, None)
+    return entwuerfe
+
+
+# ---------- Status (eine Quelle für alle Anzeigen) ----------
+
+
+def freigabe_stufe(a):
+    """arbeit / geaendert / frei – aus den beiden Versionsnummern."""
+    if not a["freigegebene_version"]:
+        return "arbeit"
+    if a["freigegebene_version"] == a["current_version"]:
+        return "frei"
+    return "geaendert"
+
+
+def artefakt_lage(artefakt_id):
+    """Sammelt alles, was über den Zustand eines Artefakts zu sagen ist."""
+    a = db.artefakt_holen(artefakt_id)
+    freigabe, autor = db.artefakt_zustand(artefakt_id)
+    return {
+        "id": artefakt_id,
+        "titel": a["title"],
+        "symbol": TYP_SYMBOL.get(a["type"], "📄"),
+        "version": a["current_version"],
+        "freigegeben_v": a["freigegebene_version"],
+        "freigabe": freigabe,
+        "stufe": freigabe_stufe(a),
+        "autor_text": AUTOR_TEXT.get(autor, autor),
+        "herkunft": HERKUNFT_KLASSE.get(autor, "neutral"),
+        "offen": len(db.offene_vorschlaege(artefakt_id)),
+    }
+
+
+## Funktionen, um Status für User anzuzeigen
+def chip(text, farbe=None):
+    """Ein kleines rundes Etikett – Stil direkt am Element."""
+    farbe = farbe or "var(--body-text-color-subdued, #6d6b66)"
+    return (f"<span style=\"{CHIP_BASIS} color:{farbe}; "
+            f"border-color:{farbe};\">{text}</span>")
+
+
+def status_chips(lage, extra=""):
+    """Die immer gleiche Statuszeile: Freigabe · Herkunft · Version · 🔒"""
+    teile = [
+        chip(lage["freigabe"], STUFEN_FARBE.get(lage["stufe"])),
+        chip(lage["autor_text"], HERKUNFT_FARBE.get(lage["herkunft"])),
+        chip(f"v{lage['version']}"),
+    ]
+    if lage["offen"]:
+        teile.append(chip(f"🔒 {lage['offen']} offen",
+                          STUFEN_FARBE["geaendert"]))
+    return ("<div style='margin:0.2em 0 0.5em 0;'>"
+            + "".join(teile) + extra + "</div>")
+
+
+def status_punkt(lage):
+    """Sehr kurze Fassung für die Seitenleiste: Punkt + Version."""
+    farbe = STUFEN_FARBE.get(lage["stufe"],
+                             "var(--body-text-color-subdued, #6d6b66)")
+    text = (f"<span style=\"color:{farbe};\">●</span> v{lage['version']}")
+    if lage["offen"]:
+        text += f" · 🔒{lage['offen']}"
+    return ("<span style='font-size:0.72em; "
+            "color:var(--body-text-color-subdued, #6d6b66);'>"
+            + text + "</span>")
+
+
+## Funktionen, um Status für LLMs anzuzeigen
+def status_klartext(lage):
+    """Dasselbe in Worten – für Systemzeilen und Werkzeugantworten."""
+    text = (f"{lage['freigabe']}, v{lage['version']}, "
+            f"zuletzt von {lage['autor_text']}")
+    if lage["offen"]:
+        text += f", 🔒 {lage['offen']} offene Vorschläge"
+    return text
+
+
+
 # ---------- Artefakte ----------
 
+def schritt_lage(step_id):
+    """Wartet in diesem Schritt etwas auf eine Entscheidung?"""
+    offen = sum(len(db.offene_vorschlaege(a["id"]))
+                for a in db.artefakte_von_schritt_primaer(step_id))
+    return {"offen": offen}
+
+
+def editor_sperre(id_text):
+    """Sperrt Editor, Speichern und Freigabe, solange Vorschläge offen sind."""
+    if not id_text:
+        return (gr.skip(),) * 4
+    offen = vorschlaege_offen(int(id_text))
+    frei = not offen
+    text = (f"🔒 Gesperrt: {offen}. Bitte oben annehmen oder verwerfen."
+            if offen else "")
+    return (gr.update(interactive=frei), gr.update(interactive=frei),
+            gr.update(interactive=frei), text)
+
+
 def artefakt_zeile(a, ausgegraut=False):
-    freigabe, autor = db.artefakt_zustand(a["id"])
-    symbol = {"text": "📄", "code": "💻",
-              "tabelle": "🧮", "checklist": "☑️"}.get(a["type"], "📄")
+    lage = artefakt_lage(a["id"])
     prefix = "↳ " if ausgegraut else ""
     btn = gr.Button(
-        f"{prefix}{symbol} {a['title']}",
+        f"{prefix}{lage['symbol']} {lage['titel']}",
         size="sm",
         elem_classes=["artefakt-zeile"] + (["schwach"] if ausgegraut else []),
     )
-    btn.click(None, js=f"() => window.open('/doc?id={a['id']}', '_blank')")
-    offen = len(db.offene_vorschlaege(a["id"]))
-    gr.Markdown(
-        f"<span class='meta'>{freigabe} · {AUTOR_TEXT.get(autor, autor)} "
-        f"· v{a['current_version']}"
-        + (f" · 💡{offen}" if offen else "") + "</span>",
-        container=False,
-    )
+    btn.click(None, js=f"() => window.open('/doc?id={a['id']}', 'doc{a['id']}')")
+    gr.Markdown(status_punkt(lage), container=False)
 
 def artefakt_erstellen_ui(chat_id, titel, typ, scope):
     if chat_id is None:
@@ -207,6 +438,12 @@ def artefakt_finden(chat_id, titel):
     return nach_titel[nah[0]] if nah else None
 
 
+def artefakte_ohne_schritt(projekt_id):
+    """Dokumente, die keinem Schritt zugeordnet sind – sonst unsichtbar."""
+    return [a for a in db.artefakte_aus_projekt_holen(projekt_id)
+            if not db.schritte_von_artefakt(a["id"])]
+
+
 def titelliste(chat_id):
     ort = db.projekt_von_chat(chat_id)
     return ", ".join(f"„{a['title']}“"
@@ -214,9 +451,15 @@ def titelliste(chat_id):
 
 
 def stil_hinweis(artefakt_id, typ, art_key):
-    """Hinweise zum Umgang mit diesem Dokument – hängt an artefakt_lesen."""
     teile = []
 
+    v = db.aktuelle_version_holen(artefakt_id)
+    kapitel = list(abschnitte.zerlegen(v["content"], typ))
+    if kapitel:
+        teile.append("Überschriften in diesem Dokument – benutze im Werkzeug "
+                     "genau diese Schreibweise:\n"
+                     + "\n".join(f"- {k}" for k in kapitel))
+    
     typ_info = artefakte.typ_holen(art_key)
     if typ_info and typ_info.prompt_zusatz:
         teile.append(typ_info.prompt_zusatz)
@@ -251,20 +494,21 @@ def regal_hinweis(chat_id):
 
     zeilen = []
     for a in db.artefakte_aus_projekt_holen(ort["project_id"]):
-        freigabe, autor = db.artefakt_zustand(a["id"])
+        lage = artefakt_lage(a["id"])
         marke = "  ← gehört zu diesem Schritt" if a["id"] in hier else ""
-        zeilen.append(f"- „{a['title']}“ ({a['type']}, v{a['current_version']}, "
-                      f"{freigabe}){marke}")
+        zeilen.append(f"- „{lage['titel']}“ ({a['type']}, "
+                      f"{status_klartext(lage)}){marke}")
 
     text = (f"Arbeitsschritt {schritt['order']}: {schritt['name']}\n\n"
             "Dokumente in diesem Projekt:\n" + "\n".join(zeilen)
             + "\n\nInhalte holst du dir mit artefakt_lesen. Änderungen schlägst "
-              "du mit vorschlag_anlegen vor und nennst dabei immer den Titel.")
+              "du mit vorschlag_anlegen vor und nennst dabei immer den Titel. "
+              "Dokumente mit 🔒 sind gesperrt, bis die Person die offenen "
+              "Vorschläge bearbeitet hat.")
     return {"role": "system", "content": text}
 
 
 def werkzeug_ausfuehren(chat_id, name, argumente):
-    print("WERKZEUG:", name, argumente)      # nur zum Testen
     """Weiche: welcher Werkzeugwunsch wird wie ausgeführt?"""
     if name == "vorschlag_anlegen":
         return wz_vorschlag_anlegen(chat_id, argumente)
@@ -280,9 +524,8 @@ def wz_artefakt_lesen(chat_id, argumente):
                 + titelliste(chat_id))
 
     v = db.aktuelle_version_holen(treffer["id"])
-    freigabe, autor = db.artefakt_zustand(treffer["id"])
-    return (f"„{treffer['title']}“ · Version {treffer['current_version']} · "
-            f"{freigabe} · zuletzt von {AUTOR_TEXT.get(autor, autor)}\n\n"
+    lage = artefakt_lage(treffer["id"])
+    return (f"„{lage['titel']}“ · {status_klartext(lage)}\n\n"
             f"{v['content']}"
             + stil_hinweis(treffer["id"], treffer["type"], treffer["art_key"]))
 
@@ -297,11 +540,25 @@ def wz_vorschlag_anlegen(chat_id, argumente):
     if not teile:
         return "Fehlgeschlagen: keine Abschnitte angegeben."
 
+    sperre = vorschlaege_offen(a["id"])
+    if sperre:
+        return (f"Fehlgeschlagen: Für „{a['title']}“ liegen bereits {sperre}. "
+                "Solange ist das Dokument gesperrt. Bitte die Person, sie im "
+                "Dokumentfenster anzunehmen oder zu verwerfen. Beschreibe deinen "
+                "Änderungswunsch so lange nur im Chat.")
+
     v = db.aktuelle_version_holen(a["id"])          # immer frisch aus der DB
     alt_teile = abschnitte.zerlegen(v["content"], a["type"])
+    vorhandene = list(alt_teile)
 
-    unbekannt = [t["abschnitt"] for t in teile if t["abschnitt"] not in alt_teile]
+    unbekannt = []
     for t in teile:
+        treffer = abschnitte.titel_zuordnen(t["abschnitt"], vorhandene)
+        if treffer:
+            t["abschnitt"] = treffer          # auf die echte Überschrift ziehen
+        else:
+            unbekannt.append(t["abschnitt"])
+        t["neu"] = abschnitte.kopf_entfernen(t["neu"], t["abschnitt"])
         t["alt"] = alt_teile.get(t["abschnitt"], "")
 
     db.vorschlag_anlegen(a["id"], a["current_version"], chat_id,
@@ -313,9 +570,9 @@ def wz_vorschlag_anlegen(chat_id, argumente):
              f"(Basis: Version {a['current_version']}). "
              "Die Person prüft ihn im Dokumentfenster und entscheidet dort.")
     if unbekannt:
-        rueck += (f" Hinweis: Diese Überschriften gibt es noch nicht: "
-                  f"{', '.join(unbekannt)}. Sie werden als neue Abschnitte "
-                  "angelegt.")
+        rueck += (f" Achtung: {', '.join(unbekannt)} passt zu keiner vorhandenen "
+                  f"Überschrift und wird als neuer Abschnitt ans Ende gestellt. "
+                  f"Vorhanden sind: {', '.join(vorhandene)}.")
     return rueck
 
 
@@ -337,17 +594,20 @@ def diff_paare(alt, neu):
     return aus
 
 
+def vorschlaege_offen(artefakt_id):
+    """Beschreibt offene Vorschläge – oder '' wenn keine da sind."""
+    offene = db.offene_vorschlaege(artefakt_id)
+    if not offene:
+        return ""
+    herkunft = ", ".join(db.chat_kurz(v["chat_id"]) for v in offene)
+    return (f"{len(offene)} unerledigte Vorschläge "
+            f"(aus: {herkunft})")
 
 
 # ---------- Funktionen für die Dokumentenseite ----------
 def kopfzeile_bauen(artefakt_id):
-    a = db.artefakt_holen(artefakt_id)
-    freigabe, autor = db.artefakt_zustand(artefakt_id)
-    return (
-        f"## {a['title']}\n"
-        f"`{freigabe}` · zuletzt: {AUTOR_TEXT.get(autor, autor)} "
-        f"· v{a['current_version']}"
-    )
+    lage = artefakt_lage(artefakt_id)
+    return f"## {lage['symbol']} {lage['titel']}\n" + status_chips(lage)
 
 # updatet regelmäßig (vgl. puls-Funktion für Hauptseite)
 def doc_puls(id_text, alter_stand):
@@ -389,6 +649,14 @@ def uebernehmen_ui(artefakt_id, vorschlag_id, checkbox_werte, teil_ids):
     db.vorschlag_erledigen(vorschlag_id)
     neu = db.aktuelle_version_holen(artefakt_id)["content"]
     return kopfzeile_bauen(artefakt_id), neu, 0
+
+
+def alle_verwerfen(id_text):
+    if not id_text:
+        return gr.skip(), gr.skip()
+    for v in db.offene_vorschlaege(int(id_text)):
+        db.vorschlag_erledigen(v["id"])
+    return 0, "Alle offenen Vorschläge verworfen."
 
 
 def doc_signatur(artefakt_id):
@@ -440,13 +708,15 @@ def pruefpunkte_erzeugen(artefakt_id):
 
 
 def freigabe_kopf(artefakt_id):
-    a = db.artefakt_holen(artefakt_id)
+    lage = artefakt_lage(artefakt_id)
     offen = len(db.pruefpunkte_holen(artefakt_id, nur_offene=True))
-    stand = ("noch nie freigegeben" if a["freigegebene_version"] == 0
-             else f"zuletzt freigegeben: v{a['freigegebene_version']}")
-    return (f"## Freigabe: {a['title']}\n"
-            f"aktuell v{a['current_version']} · {stand} · "
-            f"**{offen} offene Prüfpunkte**")
+    stand = ("noch nie freigegeben" if not lage["freigegeben_v"]
+             else f"zuletzt freigegeben: v{lage['freigegeben_v']}")
+    extra = chip(stand)
+    extra += (chip(f"❗ {offen} offene Prüfpunkte", "chip-offen") if offen
+              else chip("✓ alle Prüfpunkte geklärt", "chip-frei"))
+    return (f"## Freigabe: {lage['symbol']} {lage['titel']}\n"
+            + status_chips(lage, extra))
 
 
 def freigabe_laden(id_text):
@@ -567,7 +837,7 @@ def dokument_hinweis(artefakt_id):
 
 
 # ---------- Hauptseite ----------
-with gr.Blocks(css=CSS) as forschungs_app:
+with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor") as forschungs_app:
     gr.Navbar(visible=False)
 
     # States
@@ -577,12 +847,11 @@ with gr.Blocks(css=CSS) as forschungs_app:
     aktueller_chat = gr.State(None)
     stand = gr.State("")
     regal_offen = gr.State(False)
+    entwuerfe = gr.State({})
 
     # Components
-    gr.Markdown("# Forschungsassistent")
-
     with gr.Row():
-        with gr.Column(scale=1):
+        with gr.Column(scale=1, elem_id="seitenleiste"):
             # Projekt
             with gr.Row():
                 gr.Markdown("### Projekt", container=False)
@@ -601,8 +870,6 @@ with gr.Blocks(css=CSS) as forschungs_app:
                     abbrechen_btn = gr.Button("Abbrechen", size="sm")
                     anlegen_btn = gr.Button("Anlegen", size="sm", variant="primary")
 
-            #Schritte
-            gr.Markdown("### Schritte")
 
             # Renders (für Schritte)
             @gr.render(inputs=[aktuelles_projekt, aktueller_chat,
@@ -612,60 +879,80 @@ with gr.Blocks(css=CSS) as forschungs_app:
                     gr.Markdown("*Bitte oben ein Projekt wählen.*")
                     return
 
-                # zu welchem Schritt gehört der aktive Chat?
+                schritte = db.schritte_holen(projekt_id)
+                if not schritte:
+                    return
+
+                # Wo steht das Gespräch gerade?
                 aktiver_schritt = None
                 if chat_id is not None:
                     s_akt = db.schritt_von_chat(chat_id)
                     if s_akt:
                         aktiver_schritt = s_akt["id"]
 
-                for s in db.schritte_holen(projekt_id):
-                    chats = db.chats_holen(s["id"])
-                    ist_aktiv = (s["id"] == aktiver_schritt)
-                    label = f"{s['name']}"
+                # Welcher Schritt wird angezeigt?
+                ids = [s["id"] for s in schritte]
+                gezeigt = offen_id if offen_id in ids else (
+                    aktiver_schritt or ids[0])
 
-                    with gr.Accordion(
-                        label,
-                        open=(s["id"] == offen_id),
-                        elem_classes=["schritt-aktiv"] if ist_aktiv else [],
-                    ):
-                        if not chats:
-                            gr.Markdown("*(keine Chats)*")
-                        for c in chats:
-                            with gr.Row():
-                                btn = gr.Button(
-                                    f"{c['title']}",
-                                    size="sm",
-                                    scale=5,
-                                    elem_classes=["chat-aktiv"] if c["id"] == chat_id else [],
-                                )
-                                del_btn = gr.Button("✕", size="sm", scale=0, min_width=35)
+                # ---- Ziffernleiste ----
+                with gr.Row(elem_classes=["schrittleiste"]):
+                    for s in schritte:
+                        klassen = ["schritt-nr"]
+                        if s["id"] == aktiver_schritt:
+                            klassen.append("nr-hier")
+                        if s["id"] == gezeigt:
+                            klassen.append("nr-gezeigt")
+                        beschriftung = str(s["order"])
+                        if schritt_lage(s["id"])["offen"]:
+                            beschriftung += "•"
+                        nr_btn = gr.Button(beschriftung, size="sm", scale=1,
+                                           min_width=34, elem_classes=klassen)
+                        nr_btn.click(lambda sid=s["id"]: sid,
+                                     None, offener_schritt)
 
-                            btn.click(
-                                lambda cid=c["id"], sid=s["id"]: (cid, sid),
-                                None, [aktueller_chat, offener_schritt],
-                            )
-                            del_btn.click(
-                                lambda aktiv, z, cid=c["id"], sid=s["id"]:
-                                    chat_loeschen_ui(cid, sid, aktiv, z),
-                                [aktueller_chat, sidebar_stand],
-                                [aktueller_chat, offener_schritt, sidebar_stand],
-                            )
+                # ---- der angezeigte Schritt ----
+                s = next(x for x in schritte if x["id"] == gezeigt)
+                gr.Markdown(f"#### {s['order']} · {s['name']}", container=False)
 
-                        gr.Button("➕ Neuer Chat", size="sm").click(
-                            chat_anlegen_ui, gr.State(s["id"]),
-                            [aktueller_chat, offener_schritt],
+                chats = db.chats_holen(s["id"])
+                if not chats:
+                    gr.Markdown("*(noch kein Chat)*", container=False)
+
+                for c in chats:
+                    with gr.Row():
+                        btn = gr.Button(
+                            c["title"], size="sm", scale=5,
+                            elem_classes=["artefakt-zeile"]
+                            + (["chat-aktiv"] if c["id"] == chat_id else []),
                         )
+                        del_btn = gr.Button("✕", size="sm", scale=0,
+                                            min_width=32)
 
-                        primaer = db.artefakte_von_schritt_primaer(s["id"])
-                        weitere = db.artefakte_von_schritt_folgend(s["id"])
+                    btn.click(
+                        lambda cid=c["id"], sid=s["id"]: (cid, sid),
+                        None, [aktueller_chat, offener_schritt],
+                    )
+                    del_btn.click(
+                        lambda aktiv, z, cid=c["id"], sid=s["id"]:
+                            chat_loeschen_ui(cid, sid, aktiv, z),
+                        [aktueller_chat, sidebar_stand],
+                        [aktueller_chat, offener_schritt, sidebar_stand],
+                    )
 
-                        if primaer or weitere:
-                            gr.Markdown("<hr class='trenner'>", container=False)
-                            for a in primaer:
-                                artefakt_zeile(a)
-                            for a in weitere:
-                                artefakt_zeile(a, ausgegraut=True)
+                gr.Button("＋ Chat", size="sm").click(
+                    lambda sid=s["id"]: chat_anlegen_ui(sid),
+                    None, [aktueller_chat, offener_schritt],
+                )
+
+                primaer = db.artefakte_von_schritt_primaer(s["id"])
+                weitere = db.artefakte_von_schritt_folgend(s["id"])
+                if primaer or weitere:
+                    gr.Markdown(TRENNER, container=False)
+                    for a in primaer:
+                        artefakt_zeile(a)
+                    for a in weitere:
+                        artefakt_zeile(a, ausgegraut=True)
 
             # Artefaktregal
             gr.Markdown("### Artefakte")
@@ -716,17 +1003,22 @@ with gr.Blocks(css=CSS) as forschungs_app:
     # Chats
     aktueller_chat.change(verlauf_laden, aktueller_chat, chatbot)
     aktueller_chat.change(chat_merken, aktueller_chat, None)
+    aktueller_chat.change(entwurf_laden, [aktueller_chat, entwuerfe], eingabe)
+    eingabe.input(entwurf_merken, [eingabe, aktueller_chat, entwuerfe], entwuerfe)
+
     senden_btn.click(
         nachricht_senden,
         [eingabe, aktueller_chat, sidebar_stand],
         [eingabe, chatbot, sidebar_stand],
-    )
+    ).then(entwurf_loeschen, [aktueller_chat, entwuerfe], entwuerfe)
     regal_btn.click(lambda offen: not offen, regal_offen, regal_offen)
     
 
     # alle zwei Sekunden wird automatisch ein tick-Event gestartet
     takt = gr.Timer(2)
     takt.tick(puls, [aktuelles_projekt, stand], stand)
+
+
 
 
 # ---------- Dokumentenseite ----------
@@ -739,7 +1031,7 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     gezeigte_version = gr.State(None)  # welche alte Version ist aufgeklappt?
 
     id_box = gr.Textbox(visible=False)     # Zwischenspeicher für die ID
-    kopf = gr.Markdown()
+    kopf = gr.Markdown(elem_id="dok_kopf")
 
 
     # Aktuelle Vorschläge
@@ -752,6 +1044,10 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
         offene = db.offene_vorschlaege(aid)
         if not offene:
             return
+
+        if len(offene) > 1:
+            alle_btn = gr.Button(f"Alle {len(offene)} verwerfen", size="sm")
+            alle_btn.click(alle_verwerfen, id_box, [vorschlag_stand, meldung])
 
         for v in offene:
             with gr.Group():
@@ -778,6 +1074,11 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                     aktuell = abschnitte.zerlegen(
                         db.aktuelle_version_holen(aid)["content"], a["type"]
                     ).get(t["abschnitt"], "")
+
+                    if not t["alt"]:
+                        gr.Markdown("<span class='warnung'>🆕 Neuer Abschnitt – "
+                                    "wird ans Dokumentende gestellt.</span>",
+                                    container=False)
 
                     gr.HighlightedText(
                         value=diff_paare(aktuell, t["neu"]),
@@ -812,13 +1113,13 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
 
     # Selbst Änderungen vornehmen
     with gr.Tabs():
+        with gr.Tab("Lesen"):
+            vorschau = gr.Markdown()
         with gr.Tab("Bearbeiten"):
             inhalt = gr.Textbox(lines=20, show_label=False, container=False)
-        with gr.Tab("Vorschau"):
-            vorschau = gr.Markdown()
     with gr.Row():
-        kopieren_btn = gr.Button("📋 Kopieren")
         speichern_btn = gr.Button("Speichern", variant="primary")
+        kopieren_btn = gr.Button("📋 Kopieren")
         freigabe_btn = gr.Button("✅ Freigabe vorbereiten")
     meldung = gr.Markdown()
 
@@ -885,19 +1186,31 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     # Wires
 
     # Dokumentenseite laden
-    # Schritt 1: JS liest ?id=… aus der URL und schreibt es in id_box
     doc_page.load(
         fn=None,
-        js="() => new URLSearchParams(window.location.search).get('id') || ''",
+        js="() => { const id = new URLSearchParams(window.location.search)"
+           ".get('id') || ''; document.title = 'Dokument ' + id; return id; }",
         outputs=id_box,
-    # Schritt 2: danach Python damit laden
-    ).then(doc_laden, id_box, [doc_id, kopf, inhalt])
+    ).then(
+        doc_laden, id_box, [doc_id, kopf, inhalt],
+    ).then(
+        editor_sperre, id_box, [inhalt, speichern_btn, freigabe_btn, meldung],
+    )
 
+    vorschlag_stand.change(
+        editor_sperre, id_box,
+        [inhalt, speichern_btn, freigabe_btn, meldung],
+    )
     doc_stand.change(
         lambda i: kopfzeile_bauen(int(i)) if i else gr.skip(),
         id_box, kopf,
     )
-
+    kopf.change(
+        fn=None,
+        js="() => setTimeout(() => {"
+           " const h = document.querySelector('#dok_kopf h2');"
+           " if (h) document.title = h.textContent.trim(); }, 50)",
+    )
     inhalt.change(lambda t: t, inhalt, vorschau)
     kopieren_btn.click(
         None, inhalt, meldung,
@@ -908,7 +1221,7 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     freigabe_btn.click(
         None,
         js="() => { const id = new URLSearchParams(window.location.search)"
-           ".get('id'); window.open('/freigabe?id=' + id, '_blank'); }",
+           ".get('id'); window.open('/freigabe?id=' + id, 'frei' + id); }",
     )
 
     doc_takt = gr.Timer(3)
@@ -917,8 +1230,10 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
 
 
 
+
 # ---------- Freigabeseite ----------
 with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
+    gr.Navbar(visible=False)
 
     # States
     frei_id = gr.State(None)          # Artefakt
@@ -929,7 +1244,7 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
 
     # Components
     frei_id_box = gr.Textbox(visible=False)
-    frei_kopf = gr.Markdown()
+    frei_kopf = gr.Markdown(elem_id="frei_kopf")
 
     with gr.Row():
         with gr.Column(scale=2):
@@ -1018,7 +1333,7 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
                 frei_senden_btn = gr.Button("➤", variant="primary",
                                             scale=1, min_width=10)
 
-    gr.Markdown("<hr class='trenner'>", container=False)
+    gr.Markdown(TRENNER, container=False)
     notiz_box = gr.Textbox(
         label="Rechenschaftsnotiz", lines=8, visible=False, interactive=True,
     )
@@ -1030,7 +1345,8 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
     # Wires
     freigabe_page.load(
         fn=None,
-        js="() => new URLSearchParams(window.location.search).get('id') || ''",
+        js="() => { const id = new URLSearchParams(window.location.search)"
+           ".get('id') || ''; document.title = 'Freigabe ' + id; return id; }",
         outputs=frei_id_box,
     ).then(
         lambda: "## Freigabe wird vorbereitet …\n*Prüfpunkte werden abgeleitet.*",
@@ -1038,6 +1354,13 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
     ).then(
         freigabe_laden, frei_id_box,
         [frei_id, frei_chat, frei_kopf, frei_chatbot],
+    )
+
+    frei_kopf.change(
+        fn=None,
+        js="() => setTimeout(() => {"
+           " const h = document.querySelector('#frei_kopf h2');"
+           " if (h) document.title = h.textContent.trim(); }, 50)",
     )
 
     frei_senden_btn.click(

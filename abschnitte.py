@@ -1,5 +1,6 @@
 # abschnitte.py
 import re
+import difflib
 
 
 def zerlegen(text, typ="text"):
@@ -122,3 +123,44 @@ def wortwechsel(alt, neu, min_laenge=3):
     return paare
 
 
+## KI schreibt selbst Abschnitt-Titel zurück, die sie überschreiben möchte
+def _normal(titel):
+    """Vereinheitlicht eine Überschrift zum Vergleichen."""
+    t = titel.strip().lower()
+    t = re.sub(r"^#+\s*", "", t)            # führende Doppelkreuze
+    t = re.sub(r"^\d+[.)]?\s*", "", t)      # führende Nummer
+    return re.sub(r"[^a-z0-9äöüß]+", "", t) # Rest: nur Buchstaben und Ziffern
+
+
+def titel_zuordnen(gesucht, vorhandene):
+    """Findet die gemeinte Überschrift im Dokument – oder None."""
+    if gesucht in vorhandene:
+        return gesucht
+
+    ziel = _normal(gesucht)
+    if not ziel:
+        return None
+
+    for t in vorhandene:                    # 1. normalisiert gleich
+        if _normal(t) == ziel:
+            return t
+
+    for t in vorhandene:                    # 2. eines steckt im anderen
+        n = _normal(t)
+        if ziel in n or n in ziel:
+            return t
+
+    karte = {_normal(t): t for t in vorhandene}   # 3. ähnlich genug
+    nah = difflib.get_close_matches(ziel, list(karte), n=1, cutoff=0.75)
+    return karte[nah[0]] if nah else None
+
+
+def kopf_entfernen(text, titel):
+    """Entfernt eine mitgelieferte Überschrift am Anfang des Abschnittstexts."""
+    zeilen = text.lstrip().split("\n")
+    if not zeilen:
+        return text
+    treffer = re.match(r"^#+\s*\d*[.)]?\s*(.+)$", zeilen[0].strip())
+    if treffer and _normal(treffer.group(1)) == _normal(titel):
+        return "\n".join(zeilen[1:]).strip()
+    return text
