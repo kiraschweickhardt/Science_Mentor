@@ -65,7 +65,9 @@ WERKZEUGE = [
                 "Person eine Änderung möchte – nicht bei bloßen Rückfragen. "
                 "Lies das Dokument vorher mit artefakt_lesen. Ist unklar, welches "
                 "Dokument gemeint ist, frage nach, statt zu raten. Der Vorschlag "
-                "ändert nichts; die Person entscheidet abschnittsweise selbst."
+                "ändert nichts; die Person entscheidet abschnittsweise selbst. "
+                "Nur für konkrete Textänderungen: Bedenken, Rückfragen und "
+                "Hinweise schreibst du stattdessen in deine Antwort im Chat."
             ),
             "parameters": {
                 "type": "object",
@@ -93,15 +95,10 @@ WERKZEUGE = [
                                         "vorhandene Überschrift erzeugt einen "
                                         "neuen Abschnitt am Ende.",
                                 },
-                                "art": {
-                                    "type": "string",
-                                    "enum": ["aenderung", "kommentar"],
-                                },
                                 "neu": {
                                     "type": "string",
-                                    "description": "Vollständiger neuer Abschnittstext "
-                                                   "ohne Überschrift; bei 'kommentar' "
-                                                   "die Anmerkung.",
+                                    "description": "Vollständiger neuer "
+                                        "Abschnittstext, ohne Überschrift.",
                                 },
                                 "begruendung": {"type": "string"},
                             },
@@ -109,7 +106,7 @@ WERKZEUGE = [
                         },
                     },
                 },
-                "required": ["titel", "summary", "teile"],
+                "required": ["abschnitt", "neu", "begruendung"],
             },
         },
     },

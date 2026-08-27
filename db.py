@@ -239,6 +239,8 @@ def projekt_anlegen(name):
 
     for nummer, titel in SCHRITTE:
         schritt_anlegen(neue_id, nummer, titel)
+        step_id = schritt_anlegen(neue_id, nummer, titel)
+        chat_anlegen(step_id, "Neuer Chat")
     # einige Artefakte soll es immer geben
     standard_artefakte_anlegen(neue_id)
     return neue_id
@@ -663,9 +665,9 @@ def artefakt_zustand(artefakt_id):
     a = artefakt_holen(artefakt_id)
     v = aktuelle_version_holen(artefakt_id)
     if a["freigegebene_version"] == a["current_version"]:
-        freigabe = "freigegeben"
+        freigabe = "fertiggestellt"
     elif a["freigegebene_version"] > 0:
-        freigabe = "geändert seit Freigabe"
+        freigabe = f"in Arbeit · zuletzt fertig: v{a['freigegebene_version']}"
     else:
         freigabe = "in Arbeit"
     return freigabe, v["author"]        # roher Wert: system | ai | human

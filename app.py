@@ -35,7 +35,7 @@ THEMA = gr.themes.Base(
     block_shadow="none",
     # Schrift
     body_text_color="#1f2328",
-    body_text_color_dark="#e7e2d9",
+    body_text_color_dark="#FAF8F4",
     body_text_color_subdued="#6d6b66",
     body_text_color_subdued_dark="#99968e",
     # Knöpfe
@@ -72,7 +72,7 @@ CSS = """
     --status-arbeit:    #99968e;
     --status-geaendert: #f0b429;
     --status-frei:      #4ade80;
-    --herkunft-mensch:  #e7e2d9;
+    --herkunft-mensch:  #FAF8F4;
     --herkunft-ki:      #a5b4fc;
     --akzent: #a5b4fc;
 }
@@ -136,7 +136,7 @@ HERKUNFT_KLASSE = {"system": "neutral", "ai": "ki",
 
 STUFEN_FARBE = {
     "arbeit":    "var(--status-arbeit, #6d6b66)",
-    "geaendert": "var(--status-geaendert, #b45309)",
+    "geaendert": "var(--status-arbeit, #6d6b66)",
     "frei":      "var(--status-frei, #15803d)",
 }
 
@@ -279,6 +279,7 @@ def chat_merken(chat_id):
         ort = db.projekt_von_chat(chat_id)
         if ort:
             db.letzten_chat_merken(ort["project_id"], chat_id)
+            db.letzten_chat_im_schritt_merken(ort["step_id"], chat_id)
 
 
 def entwurf_merken(text, chat_id, entwuerfe):
@@ -381,6 +382,18 @@ def schritt_lage(step_id):
     return {"offen": offen}
 
 
+def schritt_waehlen(step_id, aktueller_chat_id):
+    """Wechselt die Ansicht und springt in den zuletzt benutzten Chat."""
+    chats = db.chats_holen(step_id)
+    if not chats:
+        return aktueller_chat_id, step_id
+    gemerkt = db.einstellung_holen(f"letzter_chat_s{step_id}")
+    ids = [c["id"] for c in chats]
+    if gemerkt and int(gemerkt) in ids:
+        return int(gemerkt), step_id
+    return chats[-1]["id"], step_id
+
+
 ## Warnung vor Bearbeiten von Artefakten, die nicht dem eigenen Schritt zugeordnet sind (verlassen eigenes Feld der Expertise)
 def fremder_schritt(chat_id, artefakt_id):
     """'' wenn das Dokument zu diesem Schritt gehört, sonst der zuständige."""
@@ -459,7 +472,8 @@ def schritte_zeichnen(projekt_id, chat_id, offen_id):
                 beschriftung += "•"
             gr.Button(beschriftung, size="sm", scale=1, min_width=34,
                       elem_classes=klassen).click(
-                lambda sid=s["id"]: sid, None, offener_schritt)
+                lambda akt, sid=s["id"]: schritt_waehlen(sid, akt),
+                aktueller_chat, [aktueller_chat, offener_schritt])
 
     # ---- der angezeigte Schritt ----
     s = [x for x in schritte if x["id"] == gezeigt][0]
@@ -654,6 +668,13 @@ def wz_vorschlag_anlegen(chat_id, argumente):
     if not teile:
         return "Fehlgeschlagen: keine Abschnitte angegeben."
 
+    kommentare = [t for t in teile if t.get("art") == "kommentar"]
+    teile = [t for t in teile if t.get("art") != "kommentar"]
+    if not teile:
+        return ("Fehlgeschlagen: Das waren nur Kommentare. Bedenken und "
+                "Rückfragen gehören in den Chat – schreibe sie einfach in "
+                "deine Antwort. Das Werkzeug ist nur für Textänderungen.")
+
     sperre = vorschlaege_offen(a["id"])
     if sperre:
         return (f"Fehlgeschlagen: Für „{a['title']}“ liegen bereits {sperre}. "
@@ -696,6 +717,10 @@ def wz_vorschlag_anlegen(chat_id, argumente):
         rueck += (f" Wichtig: Dieses Dokument gehört zu Schritt {fremd}, nicht "
                   "zu deinem. Weise die Person ausdrücklich darauf hin, dass "
                   "sie den Vorschlag besser mit dem dortigen Experten prüft.")
+
+    if kommentare:
+        rueck += (f" {len(kommentare)} Teile waren Kommentare und wurden nicht "
+                  "übernommen – sage der Person diese Punkte im Chat.")
     return rueck
 
 
@@ -852,15 +877,17 @@ def uebernehmen_ui(artefakt_id, vorschlag_id, checkbox_werte, teil_ids):
     db.teile_uebernehmen(artefakt_id, gewaehlt)
     db.vorschlag_erledigen(vorschlag_id)
     neu = db.aktuelle_version_holen(artefakt_id)["content"]
-    return kopfzeile_bauen(artefakt_id), neu, 0
+    return (kopfzeile_bauen(artefakt_id), neu,
+            db.vorschlag_signatur(artefakt_id))
 
 
 def alle_verwerfen(id_text):
     if not id_text:
         return gr.skip(), gr.skip()
-    for v in db.offene_vorschlaege(int(id_text)):
+    aid = int(id_text)
+    for v in db.offene_vorschlaege(aid):
         db.vorschlag_erledigen(v["id"])
-    return 0, "Alle offenen Vorschläge verworfen."
+    return db.vorschlag_signatur(aid), "Alle offenen Vorschläge verworfen."
 
 
 def doc_signatur(artefakt_id):
@@ -883,8 +910,8 @@ def version_puls(id_text, alter_stand):
 
 
 def pruefpunkte_erzeugen(artefakt_id):
-    """Leitet Prüfpunkte aus dem Diff seit der letzten Freigabe ab.
-    Gibt die Anzahl offener Punkte zurück."""
+    """Leitet Anregungen aus dem Diff seit der letzten Freigabe ab.
+    Gibt die Anzahl offener Anregungen zurück."""
     offen = db.pruefpunkte_holen(artefakt_id, nur_offene=True)
     if offen:
         return len(offen)          # es läuft schon eine Runde
@@ -917,10 +944,10 @@ def freigabe_kopf(artefakt_id):
     stand = ("noch nie freigegeben" if not lage["freigegeben_v"]
              else f"zuletzt freigegeben: v{lage['freigegeben_v']}")
     extra = chip(stand)
-    extra += (chip(f"❗ {offen} offene Prüfpunkte", STUFEN_FARBE["geaendert"])
-              if offen else chip("✓ alle Prüfpunkte geklärt",
+    extra += (chip(f"🪞 {offen} Anregungen offen", STUFEN_FARBE["geaendert"])
+              if offen else chip("✓ alles besprochen",
                                  STUFEN_FARBE["frei"]))
-    return (f"## Freigabe: {lage['symbol']} {lage['titel']}\n"
+    return (f"## Reflexion: {lage['symbol']} {lage['titel']}\n"
             + status_chips(lage, extra))
 
 
@@ -980,14 +1007,14 @@ def freigabe_senden(text, chat_id, artefakt_id, punkt_id, zaehler):
 
 
 def notiz_bauen(artefakt_id):
-    """Schlichte Rechenschaftsnotiz aus den Prüfpunkten (LLM-Fassung folgt)."""
+    """Schlichte Reflexionsnotizen aus den Prüfpunkten (LLM-Fassung folgt)."""
     zeilen = []
     for p in db.pruefpunkte_holen(artefakt_id):
         wort = {"geklaert": "erläutert", "uebersprungen": "übersprungen",
                 "offen": "offen"}.get(p["status"], p["status"])
         zeilen.append(f"- {p['abschnitt'] or 'Allgemein'}: {p['frage']} "
                       f"→ {wort}. {p['antwort'] or p['begruendung'] or ''}".strip())
-    return "\n".join(zeilen) if zeilen else "Keine Prüfpunkte."
+    return "\n".join(zeilen) if zeilen else "Keine Anregungen."
 
 
 def notiz_erzeugen(artefakt_id):
@@ -995,8 +1022,8 @@ def notiz_erzeugen(artefakt_id):
         return gr.skip(), "⚠️ Kein Dokument geladen."
     a = db.artefakt_holen(artefakt_id)
     roh = notiz_bauen(artefakt_id)
-    if roh == "Keine Prüfpunkte.":
-        text = "Für diese Freigabe wurden keine Prüfpunkte abgeleitet."
+    if roh == "Keine Anregungen.":
+        text = "Für diese Freigabe wurden keine Anregungen abgeleitet."
     else:
         text = experten.FragenExperte().notiz_schreiben(a["title"], roh)
     return (gr.update(value=text, visible=True),
@@ -1014,7 +1041,7 @@ def freigabe_abschliessen(artefakt_id, chat_id, notiz_text):
     db.freigeben(artefakt_id, notiz, chat_id)
     db.systemzeile(chat_id, f"Freigegeben als Version "
                             f"{db.artefakt_holen(artefakt_id)['current_version']}")
-    return (freigabe_kopf(artefakt_id), "✅ Freigegeben.", 0,
+    return (freigabe_kopf(artefakt_id), "freigegeben", 0,
             gr.update(visible=False))
 
 
@@ -1023,8 +1050,8 @@ def freigabe_vorbereiten(id_text):
         return "⚠️ Kein Dokument geladen."
     anzahl = pruefpunkte_erzeugen(int(id_text))
     if anzahl == 0:
-        return "Keine Änderungen seit der letzten Freigabe."
-    return f"{anzahl} Prüfpunkte vorbereitet – Fenster wird geöffnet."
+        return "Keine Änderungen seit der letzten Reflektion."
+    return f"{anzahl} Anregungen vorbereitet – Fenster wird geöffnet."
 
 
 def dokument_hinweis(artefakt_id):
@@ -1189,10 +1216,6 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                         continue
                     gr.Markdown(f"**{t['abschnitt']}** — *{t['begruendung']}*")
 
-                    if t["art"] == "kommentar":
-                        gr.Markdown(f"> 💬 {t['neu']}")
-                        continue
-
                     veraltet = db.teil_veraltet(aid, v["base_version"],
                                                 t["abschnitt"], a["type"])
                     if veraltet:
@@ -1235,8 +1258,11 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                     [kopf, inhalt, vorschlag_stand],
                 )
                 verwerfen_btn.click(
-                    lambda z, vid=v["id"]: (db.vorschlag_erledigen(vid), z + 1)[1],
-                    vorschlag_stand, vorschlag_stand,
+                    lambda vid=v["id"], aid=aid: (
+                        db.vorschlag_erledigen(vid),
+                        db.vorschlag_signatur(aid),
+                    )[1],
+                    None, vorschlag_stand,
                 )
 
 
@@ -1253,7 +1279,7 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     with gr.Row():
         speichern_btn = gr.Button("Speichern", variant="primary")
         kopieren_btn = gr.Button("📋 Kopieren")
-        freigabe_btn = gr.Button("✅ Freigabe vorbereiten")
+        freigabe_btn = gr.Button("🪞 Reflektieren & Fertigstellen")
     meldung = gr.Markdown()
 
 
@@ -1417,7 +1443,7 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
 
 
 # ---------- Freigabeseite ----------
-with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
+with forschungs_app.route("Reflektieren und Fertigstellen", "/freigabe") as freigabe_page:
     gr.Navbar(visible=False)
 
     # States
@@ -1433,7 +1459,7 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
 
     with gr.Row():
         with gr.Column(scale=2):
-            gr.Markdown("### Prüfpunkte")
+            gr.Markdown("### Anregungen")
 
             @gr.render(inputs=[frei_id, punkt_stand, ueberspringen_offen,
                                aktiver_punkt])
@@ -1443,8 +1469,8 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
                 a = db.artefakt_holen(aid)
                 punkte = db.pruefpunkte_holen(aid)
                 if not punkte:
-                    gr.Markdown("*Keine Prüfpunkte – du kannst direkt "
-                                "freigeben.*")
+                    gr.Markdown("*Keine Anregungen – du kannst direkt "
+                                "fertigstellen.*")
                     return
 
                 symbol = {"offen": "⬜", "geklaert": "✅",
@@ -1466,16 +1492,9 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
                                             container=False)
                             continue
 
-                        if p["bis_version"] < a["current_version"]:
-                            gr.Markdown(
-                                "<span class='warnung'>⚠️ Das Dokument wurde "
-                                "seit diesem Prüfpunkt geändert.</span>",
-                                container=False,
-                            )
-
                         with gr.Row():
-                            bespr_btn = gr.Button("Besprechen", size="sm")
-                            ueber_btn = gr.Button("Überspringen", size="sm")
+                            bespr_btn = gr.Button("Dazu schreiben", size="sm")
+                            ueber_btn = gr.Button("Nicht nötig", size="sm")
 
                         bespr_btn.click(
                             lambda cid, z, pid=p["id"]:
@@ -1485,28 +1504,14 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
                         )
 
                         ueber_btn.click(
-                            lambda auf, pid=p["id"]:
-                                None if auf == pid else pid,
-                            ueberspringen_offen, ueberspringen_offen,
+                            lambda z, aid=aid, pid=p["id"]: (
+                                db.pruefpunkt_abschliessen(
+                                    pid, "uebersprungen",
+                                    begruendung="nicht nötig"),
+                                z + 1, freigabe_kopf(aid),
+                            )[1:],
+                            punkt_stand, [punkt_stand, frei_kopf],
                         )
-
-                        if offen_id == p["id"]:
-                            grund = gr.Textbox(
-                                placeholder="Warum überspringst du diesen "
-                                            "Punkt?",
-                                show_label=False, lines=2, container=False,
-                            )
-                            ok_btn = gr.Button("Übersprungen vermerken",
-                                               size="sm")
-                            ok_btn.click(
-                                lambda t, z, aid=aid, pid=p["id"]: (
-                                    db.pruefpunkt_abschliessen(
-                                        pid, "uebersprungen", begruendung=t),
-                                    None, z + 1, freigabe_kopf(aid),
-                                )[1:],
-                                [grund, punkt_stand],
-                                [ueberspringen_offen, punkt_stand, frei_kopf],
-                            )
 
         with gr.Column(scale=3):
             frei_chatbot = gr.Chatbot(height=380)
@@ -1520,11 +1525,11 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
 
     gr.Markdown(TRENNER, container=False)
     notiz_box = gr.Textbox(
-        label="Rechenschaftsnotiz", lines=8, visible=False, interactive=True,
+        label="Reflexionsnotizen", lines=8, visible=False, interactive=True,
     )
     with gr.Row():
-        notiz_btn = gr.Button("📝 Rechenschaftsnotiz erstellen")
-        abschluss_btn = gr.Button("✅ Freigeben", variant="primary")
+        notiz_btn = gr.Button("📝 Reflexionsnotizen erstellen")
+        abschluss_btn = gr.Button("✅ Fertigstellen & Freigeben", variant="primary")
     frei_meldung = gr.Markdown()
 
     # Wires
@@ -1534,7 +1539,7 @@ with forschungs_app.route("Freigabe", "/freigabe") as freigabe_page:
            ".get('id') || ''; document.title = 'Freigabe ' + id; return id; }",
         outputs=frei_id_box,
     ).then(
-        lambda: "## Freigabe wird vorbereitet …\n*Prüfpunkte werden abgeleitet.*",
+        lambda: "## Freigabe wird vorbereitet …\n*Anregungen werden überlegt.*",
         None, frei_kopf,
     ).then(
         freigabe_laden, frei_id_box,
