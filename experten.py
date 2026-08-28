@@ -102,11 +102,11 @@ WERKZEUGE = [
                                 },
                                 "begruendung": {"type": "string"},
                             },
-                            "required": ["abschnitt", "art", "neu", "begruendung"],
+                            "required": ["abschnitt", "neu", "begruendung"],
                         },
                     },
                 },
-                "required": ["abschnitt", "neu", "begruendung"],
+                "required": ["titel", "summary", "teile"],
             },
         },
     },
@@ -139,6 +139,12 @@ WERKZEUGE = [
 class Experte:
     name = "Allgemein"
     system_prompt = "Du bist ein hilfreicher Forschungsassistent."
+    artefakt_prompt = (
+        "Schreibe aus dem bisherigen Gespräch das folgende Dokument. "
+        "Gliedere es mit Markdown-Überschriften der Ebene zwei (##). "
+        "Gib nur das Dokument selbst aus – keine Einleitung, keine "
+        "Rückfragen, keine Bemerkungen darüber."
+    )
     model = "gpt-oss-120b"
     temperature = 0.7
 
@@ -147,7 +153,7 @@ class Experte:
         """Antwortet. Wird 'ausfuehren' übergeben, darf das Modell Werkzeuge nutzen."""
         nachrichten = [{"role": "system", "content": self.system_prompt}] + verlauf
 
-        for _ in range(4):                     # höchstens 4 Werkzeugrunden                     # höchstens 3 Werkzeugrunden
+        for _ in range(4):                     # höchstens 4 Werkzeugrunden
             anfrage = {
                 "model": self.model,
                 "messages": nachrichten,
@@ -290,24 +296,39 @@ class FragenExperte(Experte):
     
 
     def pruefpunkte_ableiten(self, artefakt_titel, unterschiede_text,
-                             prompt_zusatz=""):
+                             prompt_zusatz="", frueher=""):
+        vorher = (
+            "\n\nDas wurde in früheren Runden bereits begründet:\n"
+            f"{frueher}\n"
+            "Frage danach nicht erneut – es sei denn, die neue Änderung "
+            "stellt die damalige Begründung infrage.\n"
+        ) if frueher else ""
+
         auftrag = (
-            f"Das Dokument „{artefakt_titel}\" soll freigegeben werden.\n"
+            f"An dem Dokument „{artefakt_titel}\" wurde weitergearbeitet.\n"
             f"{prompt_zusatz}\n\n"
-            "Diese Änderungen sind seit der letzten Freigabe entstanden:\n"
-            f"---\n{unterschiede_text}\n---\n\n"
-            "Leite daraus höchstens 4 Prüfpunkte ab – Entscheidungen, die die "
-            "forschende Person begründen können sollte.\n\n"
+            "Das hat sich geändert:\n"
+            f"---\n{unterschiede_text}\n---\n"
+            f"{vorher}\n"
+            "Suche die Knackpunkte: Entscheidungen, bei denen es "
+            "erfahrungsgemäß schiefgeht, die später schwer zu revidieren "
+            "sind oder die eine Gutachterin als Erstes hinterfragen würde. "
+            "Formuliere zu jedem eine Frage, die zum Nachdenken bringt.\n\n"
             "Regeln:\n"
+            "- So viele Punkte, wie es Knackpunkte gibt: bei einer kleinen "
+            "Änderung oft nur einer, bei einer großen auch fünf. Gibt es "
+            "keinen, gib eine leere Liste zurück. Nimm nichts auf, nur "
+            "damit die Liste länger wird.\n"
             "- Priorität 1 für gelöschte Inhalte sowie für Änderungen an "
-            "Hypothesen, Stichprobe, Ausschlusskriterien und Analyseplan.\n"
-            "- Priorität 2 für alles Übrige.\n"
+            "Hypothesen, Stichprobe, Ausschlusskriterien und Analyseplan. "
+            "Priorität 2 für alles Übrige.\n"
             "- Jede Frage betrifft genau eine Entscheidung.\n"
             "- Keine Ja/Nein-Fragen und keine Suggestivfragen.\n"
             "- Frage nach dem Grund, nicht nach dem Inhalt "
             "(also „Warum …?\", nicht „Was steht in …?\").\n"
-            "- Nenne in 'abschnitt' die betroffene Überschrift.\n"
-            "- Lieber zwei gute Punkte als vier beliebige."
+            "- Frage nichts, was fachlich selbstverständlich ist. Für "
+            "etablierte Praxis verlangst du keine Herleitung.\n"
+            "- Nenne in 'abschnitt' die betroffene Überschrift."
         )
         antwort = client.chat.completions.create(
             model=self.model,

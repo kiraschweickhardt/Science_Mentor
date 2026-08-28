@@ -76,6 +76,9 @@ def init_db():
         scope                 TEXT NOT NULL DEFAULT 'step',
         current_version       INTEGER NOT NULL DEFAULT 0,
         freigegebene_version  INTEGER NOT NULL DEFAULT 0,
+        entwurf               TEXT,
+        entwurf_autor         TEXT,
+        entwurf_ts            TEXT,
         updated_at            TEXT NOT NULL,
         FOREIGN KEY (project_id) REFERENCES projects(id)
     );
@@ -96,7 +99,8 @@ def init_db():
         content     TEXT,
         author      TEXT NOT NULL,
         ts          TEXT NOT NULL,
-        note        TEXT,
+        description TEXT,
+        reflexion   TEXT,
         FOREIGN KEY (product_id) REFERENCES products(id)
     );
     
@@ -131,6 +135,8 @@ def init_db():
         bis_version  INTEGER NOT NULL,
         abschnitt    TEXT,
         frage        TEXT NOT NULL,
+        art          TEXT NOT NULL DEFAULT 'frage',
+        quelle       TEXT NOT NULL DEFAULT 'ki',
         prioritaet   INTEGER NOT NULL DEFAULT 2,
         status       TEXT NOT NULL DEFAULT 'offen',
         antwort      TEXT,
@@ -218,6 +224,12 @@ def einstellung_setzen(key, value):
 def letzten_chat_merken(project_id, chat_id):
     einstellung_setzen(f"letzter_chat_p{project_id}", chat_id)
 
+
+# pro Schritt merken, wo man war – damit der Schrittwechsel dorthin springt
+def letzten_chat_im_schritt_merken(step_id, chat_id):
+    einstellung_setzen(f"letzter_chat_s{step_id}", chat_id)
+
+
 # Pro Projekt bei Schritt 1 mit einem ersten Chat starten
 def einstieg_ermitteln(project_id):
     """Gibt (step_id, chat_id) zurück: zuletzt bearbeitet, sonst Schritt 1."""
@@ -238,7 +250,6 @@ def projekt_anlegen(name):
     conn.close()
 
     for nummer, titel in SCHRITTE:
-        schritt_anlegen(neue_id, nummer, titel)
         step_id = schritt_anlegen(neue_id, nummer, titel)
         chat_anlegen(step_id, "Neuer Chat")
     # einige Artefakte soll es immer geben
@@ -345,7 +356,8 @@ def artefakt_anlegen(project_id, type, title, content,
     )
     artefakt_id = cur.lastrowid
     conn.execute(
-        """INSERT INTO versions (product_id, n, content, author, ts, note, chat_id)
+        """INSERT INTO versions
+           (product_id, n, content, author, ts, description, chat_id)
            VALUES (?, 1, ?, ?, ?, ?, ?)""",
         (artefakt_id, content, author, zeit, "Erste Version", chat_id)
     )
@@ -355,7 +367,7 @@ def artefakt_anlegen(project_id, type, title, content,
 
 
 # eine aktuellere Version für ein Artefakt hinzufügen
-def version_hinzufuegen(artefakt_id, content, author, note="", chat_id=None):
+def version_hinzufuegen(artefakt_id, content, author, beschreibung="", chat_id=None):
     conn = verbindung()
     zeit = jetzt()
 
@@ -369,9 +381,10 @@ def version_hinzufuegen(artefakt_id, content, author, note="", chat_id=None):
     neue_n = zeile["max_n"] + 1
 
     conn.execute(
-        """INSERT INTO versions (product_id, n, content, author, ts, note, chat_id)
+        """INSERT INTO versions
+           (product_id, n, content, author, ts, description, chat_id)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (artefakt_id, neue_n, content, author, zeit, note, chat_id)
+        (artefakt_id, neue_n, content, author, zeit, beschreibung, chat_id)
     )
     conn.execute(
         "UPDATE products SET current_version = ?, updated_at = ? WHERE id = ?",
@@ -399,8 +412,8 @@ def version_zuruecksetzen(artefakt_id, ziel_n, author="human"):
     conn.close()
 
     # 2) diesen Inhalt als neue Version obendrauf legen
-    note = f"Zurückgesetzt auf Version {ziel_n}"
-    neue_n = version_hinzufuegen(artefakt_id, alt["content"], author, note)
+    beschreibung = f"Zurückgesetzt auf Version {ziel_n}"
+    neue_n = version_hinzufuegen(artefakt_id, alt["content"], author, beschreibung)
     return neue_n
 
 
@@ -609,17 +622,113 @@ def aktuelle_version_holen(artefakt_id):
 
     # dann: den Inhalt genau dieser Version holen
     v = conn.execute(
-        "SELECT n, content, author, ts, note FROM versions WHERE product_id = ? AND n = ?",
+        "SELECT n, content, author, ts, description FROM versions WHERE product_id = ? AND n = ?",
         (artefakt_id, p["current_version"])
     ).fetchone()
     conn.close()
     return v
 
+
+# ---------- Arbeitsstand ----------
+# Der Text, an dem gerade getippt wird. Liegt in products.entwurf und ist
+# noch keine Version. Ist entwurf NULL, gilt die aktuelle Version.
+
+def arbeitsstand_holen(artefakt_id):
+    """Gibt inhalt, autor, ungesichert und die zugrunde liegende Version."""
+    conn = verbindung()
+    p = conn.execute(
+        "SELECT current_version, entwurf, entwurf_autor FROM products WHERE id = ?",
+        (artefakt_id,)
+    ).fetchone()
+
+    if p["entwurf"] is not None:
+        conn.close()
+        return {"inhalt": p["entwurf"],
+                "autor": p["entwurf_autor"] or "human",
+                "ungesichert": True,
+                "version": p["current_version"]}
+
+    v = conn.execute(
+        "SELECT content, author FROM versions WHERE product_id = ? AND n = ?",
+        (artefakt_id, p["current_version"])
+    ).fetchone()
+    conn.close()
+    return {"inhalt": v["content"] if v else "",
+            "autor": v["author"] if v else "system",
+            "ungesichert": False,
+            "version": p["current_version"]}
+
+
+def arbeitsstand_text(artefakt_id):
+    """Kurzform – nur der Text. Ersetzt fast überall aktuelle_version_holen."""
+    return arbeitsstand_holen(artefakt_id)["inhalt"]
+
+
+def arbeitsstand_verwerfen(artefakt_id):
+    """Wirft den Entwurf weg; das Dokument ist wieder die aktuelle Version."""
+    conn = verbindung()
+    conn.execute(
+        "UPDATE products SET entwurf = NULL, entwurf_autor = NULL, "
+        "entwurf_ts = NULL WHERE id = ?",
+        (artefakt_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def arbeitsstand_speichern(artefakt_id, text, autor="human"):
+    """Legt den Text als Entwurf ab. True, wenn sich etwas geändert hat.
+
+    Rührt updated_at absichtlich NICHT an – sonst würde die Seitenleiste
+    bei jedem Tastendruck neu zeichnen.
+    """
+    stand = arbeitsstand_holen(artefakt_id)
+    if text == stand["inhalt"]:
+        return False                                  # nichts Neues
+
+    gesichert = version_holen(artefakt_id, stand["version"])
+    if gesichert and text == gesichert["content"]:    # wieder wie gesichert
+        arbeitsstand_verwerfen(artefakt_id)
+        return True
+
+    conn = verbindung()
+    conn.execute(
+        "UPDATE products SET entwurf = ?, entwurf_autor = ?, entwurf_ts = ? "
+        "WHERE id = ?",
+        (text, autor, jetzt(), artefakt_id)
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def hat_entwurf(artefakt_id):
+    """Liegt ein Entwurf vor, der noch keine Version ist?"""
+    conn = verbindung()
+    z = conn.execute(
+        "SELECT entwurf IS NOT NULL AS ja FROM products WHERE id = ?",
+        (artefakt_id,)
+    ).fetchone()
+    conn.close()
+    return bool(z["ja"]) if z else False
+
+
+def version_festhalten(artefakt_id, beschreibung, chat_id=None):
+    """Macht aus dem Entwurf eine Version. Nummer zurück – oder None."""
+    stand = arbeitsstand_holen(artefakt_id)
+    if not stand["ungesichert"]:
+        return None
+    neue_n = version_hinzufuegen(artefakt_id, stand["inhalt"], stand["autor"],
+                                 beschreibung or "", chat_id=chat_id)
+    arbeitsstand_verwerfen(artefakt_id)
+    return neue_n
+
+
 # alle Versionen auflisten
 def versionen_holen(artefakt_id):
     conn = verbindung()
     zeilen = conn.execute(
-        """SELECT n, author, ts, note
+        """SELECT n, author, ts, description, reflexion
            FROM versions WHERE product_id = ?
            ORDER BY n DESC""",
         (artefakt_id,)
@@ -627,11 +736,33 @@ def versionen_holen(artefakt_id):
     conn.close()
     return zeilen
 
+
+def reflexion_holen(artefakt_id, n):
+    """Die Reflexionsnotiz zu einer Version – oder leerer Text."""
+    conn = verbindung()
+    z = conn.execute(
+        "SELECT reflexion FROM versions WHERE product_id = ? AND n = ?",
+        (artefakt_id, n)
+    ).fetchone()
+    conn.close()
+    return (z["reflexion"] if z else "") or ""
+
+
+def reflexion_speichern(artefakt_id, n, text):
+    conn = verbindung()
+    conn.execute(
+        "UPDATE versions SET reflexion = ? WHERE product_id = ? AND n = ?",
+        (text, artefakt_id, n)
+    )
+    conn.commit()
+    conn.close()
+
+
 def version_holen(artefakt_id, n):
     """Inhalt genau einer Version."""
     conn = verbindung()
     z = conn.execute(
-        "SELECT n, content, author, ts, note FROM versions "
+        "SELECT n, content, author, ts, description FROM versions "
         "WHERE product_id = ? AND n = ?",
         (artefakt_id, n)
     ).fetchone()
@@ -663,43 +794,30 @@ def wortwahl_holen(artefakt_id, grenze=12):
 
 def artefakt_zustand(artefakt_id):
     a = artefakt_holen(artefakt_id)
-    v = aktuelle_version_holen(artefakt_id)
+    stand = arbeitsstand_holen(artefakt_id)
     if a["freigegebene_version"] == a["current_version"]:
         freigabe = "fertiggestellt"
     elif a["freigegebene_version"] > 0:
         freigabe = f"in Arbeit · zuletzt fertig: v{a['freigegebene_version']}"
     else:
         freigabe = "in Arbeit"
-    return freigabe, v["author"]        # roher Wert: system | ai | human
+    return freigabe, stand["autor"]        # system | ai | human | uebernommen
 
+def teil_veraltet(artefakt_id, alt_text, abschnitt, typ):
+    """Hat sich der Abschnitt geändert, seit die KI ihn gelesen hat?
 
-def teil_veraltet(artefakt_id, base_version, abschnitt, typ):
-    """Hat sich dieser Abschnitt seit base_version geändert?"""
-    import abschnitte
-    a = artefakt_holen(artefakt_id)
-    if a["current_version"] == base_version:
-        return False
-
-    conn = verbindung()
-    alt = conn.execute(
-        "SELECT content FROM versions WHERE product_id = ? AND n = ?",
-        (artefakt_id, base_version)
-    ).fetchone()
-    conn.close()
-    if alt is None:
-        return True
-
-    jetzt_text = aktuelle_version_holen(artefakt_id)["content"]
-    a_alt = abschnitte.zerlegen(alt["content"], typ).get(abschnitt, "")
-    a_neu = abschnitte.zerlegen(jetzt_text, typ).get(abschnitt, "")
-    return a_alt != a_neu
+    Verglichen wird mit dem Text, den der Vorschlag selbst als 'alt'
+    mitführt – genau die Fassung, die das Modell vor Augen hatte.
+    """
+    aktuell = abschnitte.zerlegen(
+        arbeitsstand_text(artefakt_id), typ).get(abschnitt, "")
+    return (alt_text or "").strip() != aktuell.strip()
 
 
 def teile_uebernehmen(artefakt_id, teil_ids, chat_id=None):
-    """Baut aus dem AKTUELLEN Inhalt + gewählten Teilen eine neue Version."""
-    import abschnitte
+    """Legt die gewählten Teile auf den Arbeitsstand."""
     a = artefakt_holen(artefakt_id)
-    text = aktuelle_version_holen(artefakt_id)["content"]
+    text = arbeitsstand_text(artefakt_id)
 
     conn = verbindung()
     platzhalter = ",".join("?" * len(teil_ids))
@@ -718,9 +836,8 @@ def teile_uebernehmen(artefakt_id, teil_ids, chat_id=None):
     for tid in teil_ids:
         teil_entscheiden(tid, "angenommen")
 
-    note = f"{len(namen)} Vorschläge übernommen: {', '.join(namen)}"
-    return version_hinzufuegen(artefakt_id, text, "uebernommen", note,
-                               chat_id=chat_id)
+    arbeitsstand_speichern(artefakt_id, text, "uebernommen")
+    return namen
 
 
 def letzte_freigabe(artefakt_id):
@@ -746,21 +863,34 @@ def freigaben_holen(artefakt_id):
     return zeilen
 
 
-def basis_fuer_freigabe(artefakt_id):
-    """Fassung, gegen die geprüft wird.
+def basis_fuer_reflexion(artefakt_id):
+    """Fassung, gegen die verglichen wird – (versionsnummer, inhalt).
 
-    Gibt (versionsnummer, inhalt) zurück:
-    - letzte freigegebene Version, wenn es eine gibt
-    - sonst die Vorlage (Version 1 von 'system')
-    - sonst (0, ""), damit alles als neu gilt
+    Das ist die jüngste ältere Version, über die schon gesprochen wurde:
+    entweder liegt eine Reflexionsnotiz an ihr oder es gibt Anregungen zu
+    ihr. Sonst die letzte fertiggestellte, sonst die Vorlage.
     """
     a = artefakt_holen(artefakt_id)
-    n = a["freigegebene_version"]
+    jetzt_n = a["current_version"]
+
+    conn = verbindung()
+    z = conn.execute(
+        """SELECT MAX(v.n) AS n FROM versions v
+           WHERE v.product_id = ? AND v.n < ?
+             AND (v.reflexion IS NOT NULL
+                  OR EXISTS (SELECT 1 FROM pruefpunkte p
+                             WHERE p.product_id = v.product_id
+                               AND p.bis_version = v.n))""",
+        (artefakt_id, jetzt_n)
+    ).fetchone()
+    conn.close()
+
+    n = (z["n"] if z and z["n"] else 0) or a["freigegebene_version"]
     if n > 0:
         return n, version_holen(artefakt_id, n)["content"]
 
     erste = version_holen(artefakt_id, 1)
-    if erste and erste["author"] == "system":
+    if erste and erste["author"] == "system" and jetzt_n > 1:
         return 1, erste["content"]
     return 0, ""
 
@@ -805,20 +935,54 @@ def abschnitts_autoren(artefakt_id, typ):
 
 
 # ---------- Pruefpunkte ----------
-def pruefpunkte_anlegen(artefakt_id, chat_id, von_version, bis_version, punkte):
-    """punkte = Liste von dicts mit abschnitt, frage, prioritaet."""
+# Zwei Wege, eine Anregung in die Datenbank zu bekommen:
+#
+#   pruefpunkt_anlegen   – einer, mit allen Angaben, gibt die neue id zurück.
+#                          Für einzelne Punkte: was du selbst hinzufügst,
+#                          ein Einwand des Devil's Advocate, ein Nachtrag.
+#
+#   pruefpunkte_anlegen  – eine ganze Runde auf einmal. Nimmt die Liste, die
+#                          das Modell geliefert hat, und setzt für alle
+#                          dieselbe Herkunft (art, quelle) und dieselben
+#                          Versionsnummern. Ruft intern nur den Singular auf.
+#
+# Der Plural ist also reine Bequemlichkeit – geschrieben wird an einer Stelle.
+
+def pruefpunkt_anlegen(artefakt_id, chat_id, von_version, bis_version,
+                       frage, abschnitt="", art="frage", quelle="ki",
+                       prioritaet=2):
+    """Legt eine einzelne Anregung an und gibt ihre id zurück.
+
+    art:    frage   (Fragensteller)  | einwand (Devil's Advocate)
+    quelle: ki      (abgeleitet)     | mensch  (selbst hinzugefügt)
+    """
     conn = verbindung()
-    for p in punkte:
-        conn.execute(
-            """INSERT INTO pruefpunkte
-               (product_id, chat_id, von_version, bis_version,
-                abschnitt, frage, prioritaet, ts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (artefakt_id, chat_id, von_version, bis_version,
-             p.get("abschnitt", ""), p["frage"], p.get("prioritaet", 2), jetzt())
-        )
+    cur = conn.execute(
+        """INSERT INTO pruefpunkte
+           (product_id, chat_id, von_version, bis_version,
+            abschnitt, frage, art, quelle, prioritaet, ts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (artefakt_id, chat_id, von_version, bis_version,
+         abschnitt, frage, art, quelle, prioritaet, jetzt())
+    )
     conn.commit()
+    neue_id = cur.lastrowid
     conn.close()
+    return neue_id
+
+
+def pruefpunkte_anlegen(artefakt_id, chat_id, von_version, bis_version,
+                        punkte, art="frage", quelle="ki"):
+    """Legt eine ganze Runde an – z. B. das, was pruefpunkte_ableiten liefert.
+
+    punkte = Liste von dicts mit abschnitt, frage, prioritaet.
+    art und quelle gelten für alle Punkte der Runde gleichermaßen.
+    """
+    for p in punkte:
+        pruefpunkt_anlegen(artefakt_id, chat_id, von_version, bis_version,
+                           p["frage"], p.get("abschnitt", ""), art, quelle,
+                           p.get("prioritaet", 2))
+
 
 def pruefpunkt_holen(punkt_id):
     conn = verbindung()
@@ -827,13 +991,32 @@ def pruefpunkt_holen(punkt_id):
     conn.close()
     return z
 
-def pruefpunkte_holen(artefakt_id, nur_offene=False):
+
+def pruefpunkte_holen(artefakt_id, nur_offene=False, version=None):
+    """version=n zeigt nur die Runde zu dieser Version."""
     conn = verbindung()
     sql = "SELECT * FROM pruefpunkte WHERE product_id = ?"
+    werte = [artefakt_id]
+    if version is not None:
+        sql += " AND bis_version = ?"
+        werte.append(version)
     if nur_offene:
         sql += " AND status = 'offen'"
     sql += " ORDER BY prioritaet, id"
-    zeilen = conn.execute(sql, (artefakt_id,)).fetchall()
+    zeilen = conn.execute(sql, tuple(werte)).fetchall()
+    conn.close()
+    return zeilen
+
+
+def pruefpunkte_geklaert_frueher(artefakt_id, vor_version):
+    """Was in früheren Runden schon begründet wurde – Kontext fürs Modell."""
+    conn = verbindung()
+    zeilen = conn.execute(
+        """SELECT abschnitt, frage, antwort, begruendung FROM pruefpunkte
+           WHERE product_id = ? AND bis_version < ? AND status = 'geklaert'
+           ORDER BY id""",
+        (artefakt_id, vor_version)
+    ).fetchall()
     conn.close()
     return zeilen
 

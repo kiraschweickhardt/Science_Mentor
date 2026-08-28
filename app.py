@@ -6,6 +6,7 @@ import artefakte
 import abschnitte
 import difflib
 import traceback
+import time
 
 
 # --------------------------------------------------------------------------
@@ -117,8 +118,30 @@ CSS = """
     color: #fff !important;
 }
 
+/* Versionsfenster: schwebt über der Seite, statt unten anzuwachsen */
+#versionsfenster {
+    position: fixed !important;
+    top: 12vh;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    width: min(560px, 92vw);
+    max-height: 76vh;
+    overflow-y: auto !important;
+    padding: 1.2em !important;
+    gap: 0.7em !important;
+    border-radius: 12px !important;
+    border: 1px solid var(--border-color-primary) !important;
+    background: var(--background-fill-primary) !important;
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* im DOM, aber unsichtbar – für Tastenkürzel */
+.versteckt { display: none !important; }
+
 /* Gradio-Fußzeile ausblenden */
 footer { display: none !important; }
+
 /* Seiten-Navigation der Mehrseiten-App ausblenden */
 nav.fillable { display: none !important; }
 """
@@ -186,15 +209,18 @@ def projekt_waehlen(pid):
 
 
 def start_projekt():
+    liste = projekt_auswahl_liste()
     wert = db.einstellung_holen("letztes_projekt")
     pid = int(wert) if wert else None
-    if pid is None:
-        return gr.update(choices=projekt_auswahl_liste()), None, None, None
+
+    if pid not in [p[1] for p in liste]:        # gelöscht oder nie gesetzt
+        pid = liste[0][1] if liste else None
+    if pid is None:                             # wirklich kein Projekt da
+        return gr.update(choices=liste, value=None), None, None, None
+
+    db.einstellung_setzen("letztes_projekt", pid)
     step_id, chat_id = db.einstieg_ermitteln(pid)
-    return (
-        gr.update(choices=projekt_auswahl_liste(), value=pid),
-        pid, chat_id, step_id,
-    )
+    return gr.update(choices=liste, value=pid), pid, chat_id, step_id
 
 # updatet regelmäßig
 def puls(projekt_id, alter_stand):
@@ -318,12 +344,14 @@ def artefakt_lage(artefakt_id):
         "id": artefakt_id,
         "titel": a["title"],
         "symbol": TYP_SYMBOL.get(a["type"], "📄"),
-        "version": a["current_version"],
+        "version": a["current_version"],          # zuletzt festgehalten
+        "arbeitsfassung": a["current_version"] + 1,   # woran gerade gearbeitet wird
         "freigegeben_v": a["freigegebene_version"],
         "freigabe": freigabe,
         "stufe": freigabe_stufe(a),
         "autor_text": AUTOR_TEXT.get(autor, autor),
         "herkunft": HERKUNFT_KLASSE.get(autor, "neutral"),
+        "entwurf": db.hat_entwurf(artefakt_id),
         "offen": len(db.offene_vorschlaege(artefakt_id)),
     }
 
@@ -341,7 +369,7 @@ def status_chips(lage, extra=""):
     teile = [
         chip(lage["freigabe"], STUFEN_FARBE.get(lage["stufe"])),
         chip(lage["autor_text"], HERKUNFT_FARBE.get(lage["herkunft"])),
-        chip(f"v{lage['version']}"),
+        chip(f"v{lage['arbeitsfassung']} · Entwurf"),
     ]
     if lage["offen"]:
         teile.append(chip(f"🔒 {lage['offen']} offen",
@@ -365,8 +393,10 @@ def status_punkt(lage):
 ## Funktionen, um Status für LLMs anzuzeigen
 def status_klartext(lage):
     """Dasselbe in Worten – für Systemzeilen und Werkzeugantworten."""
-    text = (f"{lage['freigabe']}, v{lage['version']}, "
-            f"zuletzt von {lage['autor_text']}")
+    text = (f"{lage['freigabe']}, Arbeitsfassung v{lage['arbeitsfassung']}"
+            + (" mit Änderungen" if lage["entwurf"] else " (noch unverändert)")
+            + f", zuletzt festgehalten: v{lage['version']}"
+            + f", zuletzt bearbeitet von {lage['autor_text']}")
     if lage["offen"]:
         text += f", 🔒 {lage['offen']} offene Vorschläge"
     return text
@@ -576,8 +606,7 @@ def titelliste(chat_id):
 def stil_hinweis(artefakt_id, typ, art_key):
     teile = []
 
-    v = db.aktuelle_version_holen(artefakt_id)
-    kapitel = list(abschnitte.zerlegen(v["content"], typ))
+    kapitel = list(abschnitte.zerlegen(db.arbeitsstand_text(artefakt_id), typ))
     if kapitel:
         teile.append("Überschriften in diesem Dokument – benutze im Werkzeug "
                      "genau diese Schreibweise:\n"
@@ -646,7 +675,7 @@ def wz_artefakt_lesen(chat_id, argumente):
         return ("Kein Dokument mit diesem Titel gefunden. Vorhanden sind: "
                 + titelliste(chat_id))
 
-    v = db.aktuelle_version_holen(treffer["id"])
+    text = db.arbeitsstand_text(treffer["id"])
     lage = artefakt_lage(treffer["id"])
     fremd = fremder_schritt(chat_id, treffer["id"])
     hinweis = (f"\n\n(Dieses Dokument gehört zu Schritt {fremd}. Du darfst es "
@@ -654,7 +683,7 @@ def wz_artefakt_lesen(chat_id, argumente):
                "Experte – sage das der Person, bevor du Änderungen "
                "vorschlägst.)") if fremd else ""
     return (f"„{lage['titel']}“ · {status_klartext(lage)}{hinweis}\n\n"
-            f"{v['content']}"
+            f"{text}"
             + stil_hinweis(treffer["id"], treffer["type"], treffer["art_key"]))
 
 
@@ -682,8 +711,8 @@ def wz_vorschlag_anlegen(chat_id, argumente):
                 "Dokumentfenster anzunehmen oder zu verwerfen. Beschreibe deinen "
                 "Änderungswunsch so lange nur im Chat.")
 
-    v = db.aktuelle_version_holen(a["id"])          # immer frisch aus der DB
-    alt_teile = abschnitte.zerlegen(v["content"], a["type"])
+    # immer frisch aus der DB – und zwar der Stand, der auf dem Schirm steht
+    alt_teile = abschnitte.zerlegen(db.arbeitsstand_text(a["id"]), a["type"])
     vorhandene = list(alt_teile)
 
     unbekannt = []
@@ -830,8 +859,9 @@ def kopiernotiz(id_text):
     lage = artefakt_lage(int(id_text))
     if lage["stufe"] == "frei":
         return ""                      # freigegeben: saubere Kopie
-    text = (f"Entwurf – {lage['titel']}, Version {lage['version']}, "
-            f"{lage['freigabe']}, zuletzt bearbeitet: {lage['autor_text']}.")
+    text = (f"Entwurf – {lage['titel']}, Arbeitsfassung v"
+            f"{lage['arbeitsfassung']}, {lage['freigabe']}, "
+            f"zuletzt bearbeitet: {lage['autor_text']}.")
     a = db.artefakt_holen(int(id_text))
     if a["type"] == "code":
         text = "# " + text
@@ -845,12 +875,94 @@ def doc_puls(id_text, alter_stand):
     neuer = db.vorschlag_signatur(int(id_text))
     return gr.skip() if neuer == alter_stand else neuer
 
-def doc_speichern(id_text, text):
+
+# ---------- Arbeitsstand und Versionen ----------
+
+SPEICHER_ZUSTAND = {
+    "gespeichert": ("✓ gespeichert", "var(--status-frei, #15803d)"),
+    "laeuft":      ("• wird gespeichert …",
+                    "var(--body-text-color-subdued, #6d6b66)"),
+}
+
+
+def speicher_html(zustand="gespeichert"):
+    """Kleine Zeile unter der Kopfzeile. Die id braucht das Tipp-JS.
+
+    Der Zeitstempel am Ende ist unsichtbar, macht den Wert aber jedes Mal
+    neu. Ohne ihn hielte Gradio die Anzeige für unverändert und ließe das
+    DOM in Ruhe – obwohl das Tipp-JS dort längst „wird gespeichert" stehen
+    hat.
+    """
+    text, farbe = SPEICHER_ZUSTAND[zustand]
+    return (f"<span id='spst' style='font-size:0.75em; color:{farbe};'>"
+            f"{text}</span><!--{time.time()}-->")
+
+
+def stand_ablegen(id_text, text):
+    """Editorinhalt in den Arbeitsstand. True, wenn sich etwas geändert hat.
+
+    Leerer Text wird nie gespeichert – sonst könnte ein Timer, der zwischen
+    Seitenaufbau und doc_laden feuert, das Dokument leerräumen.
+    """
+    if not id_text or not (text or "").strip():
+        return False
+    return db.arbeitsstand_speichern(int(id_text), text)
+
+
+def auto_speichern(id_text, text):
+    """Läuft still: beim Verlassen des Feldes, per Timer, per Strg+S."""
     if not id_text:
-        return gr.skip(), "⚠️ Kein Dokument geladen."
+        return gr.skip(), gr.skip()
+    geaendert = stand_ablegen(id_text, text)
+    return (kopfzeile_bauen(int(id_text)) if geaendert else gr.skip(),
+            speicher_html("gespeichert"))
+
+
+# Beide Funktionen bedienen dieselben sechs Ausgänge:
+# version_box, version_titel, beschreibung, version_ok_btn,
+# version_reflex_btn, version_zu_btn
+
+def version_fenster_oeffnen(id_text, text):
+    """Fragt nach einer Beschreibung für die Änderungen seit der letzten Version."""
+    if not id_text:
+        return (gr.skip(),) * 6
     aid = int(id_text)
-    db.version_hinzufuegen(aid, text, "human", "Manuell bearbeitet")
-    return kopfzeile_bauen(aid), "✅ Gespeichert."
+    stand_ablegen(id_text, text)
+    n = db.artefakt_holen(aid)["current_version"]
+
+    if not db.hat_entwurf(aid):
+        return (gr.update(visible=True),
+                f"**v{n + 1} ist noch leer**  \nSeit v{n} hat sich nichts "
+                f"geändert – es gibt nichts zu beschreiben.",
+                gr.update(visible=False), gr.update(visible=False),
+                gr.update(visible=True), gr.update(value="Schließen"))
+
+    return (gr.update(visible=True),
+            f"**v{n + 1} festhalten**  \n"
+            f"<span style='font-size:0.85em; "
+            f"color:var(--body-text-color-subdued,#6d6b66);'>"
+            f"Dein Text ist längst gespeichert. Halte hier fest, was du an "
+            f"dieser Fassung gemacht hast – dann steht es später in der "
+            f"Historie, und du arbeitest ab jetzt an <b>v{n + 2}</b>.</span>",
+            gr.update(visible=True, value=""), gr.update(visible=True),
+            gr.update(visible=False), gr.update(value="Abbrechen"))
+
+
+def version_festhalten_ui(id_text, beschreibung_text):
+    """Legt die Version an und meldet das im selben Fenster."""
+    if not id_text:
+        return (gr.skip(),) * 8
+    aid = int(id_text)
+    n = db.version_festhalten(aid, (beschreibung_text or "").strip()
+                                   or "ohne Beschreibung")
+    titel = ("**Nichts festzuhalten**  \nEs gab keine Änderungen."
+             if n is None else
+             f"**v{n} festgehalten**  \nDu arbeitest ab jetzt an v{n + 1}. "
+             f"Magst du über v{n} reflektieren?")
+    return (gr.skip(), titel,
+            gr.update(visible=False), gr.update(visible=False),
+            gr.update(visible=True), gr.update(value="Schließen"),
+            kopfzeile_bauen(aid), doc_signatur(aid))
 
 
 def doc_freigeben(id_text):
@@ -865,8 +977,7 @@ def doc_laden(id_text):
     if not id_text:
         return None, "## Kein Dokument gewählt", ""
     pid = int(id_text)
-    v = db.aktuelle_version_holen(pid)
-    return pid, kopfzeile_bauen(pid), v["content"]
+    return pid, kopfzeile_bauen(pid), db.arbeitsstand_text(pid)
 
 
 def uebernehmen_ui(artefakt_id, vorschlag_id, checkbox_werte, teil_ids):
@@ -876,7 +987,7 @@ def uebernehmen_ui(artefakt_id, vorschlag_id, checkbox_werte, teil_ids):
         return gr.skip(), gr.skip(), gr.skip()
     db.teile_uebernehmen(artefakt_id, gewaehlt)
     db.vorschlag_erledigen(vorschlag_id)
-    neu = db.aktuelle_version_holen(artefakt_id)["content"]
+    neu = db.arbeitsstand_text(artefakt_id)
     return (kopfzeile_bauen(artefakt_id), neu,
             db.vorschlag_signatur(artefakt_id))
 
@@ -891,14 +1002,16 @@ def alle_verwerfen(id_text):
 
 
 def doc_signatur(artefakt_id):
-    """Fingerabdruck: ändert sich bei neuer Version UND bei Freigabe."""
+    """Fingerabdruck: neue Version, Freigabe, ungesicherte Änderungen."""
     a = db.artefakt_holen(artefakt_id)
-    return f"{a['current_version']}|{a['freigegebene_version']}"
+    return (f"{a['current_version']}|{a['freigegebene_version']}"
+            f"|{1 if a['entwurf'] is not None else 0}")
 
 
 def zuruecksetzen_ui(artefakt_id, ziel_n):
     db.version_zuruecksetzen(artefakt_id, ziel_n)
-    neu = db.aktuelle_version_holen(artefakt_id)["content"]
+    db.arbeitsstand_verwerfen(artefakt_id)
+    neu = db.arbeitsstand_text(artefakt_id)
     return kopfzeile_bauen(artefakt_id), neu, doc_signatur(artefakt_id)
 
 
@@ -910,44 +1023,73 @@ def version_puls(id_text, alter_stand):
 
 
 def pruefpunkte_erzeugen(artefakt_id):
-    """Leitet Anregungen aus dem Diff seit der letzten Freigabe ab.
-    Gibt die Anzahl offener Anregungen zurück."""
-    offen = db.pruefpunkte_holen(artefakt_id, nur_offene=True)
-    if offen:
-        return len(offen)          # es läuft schon eine Runde
+    """Anregungen zur aktuellen Version – höchstens einmal pro Version.
 
+    Eine neue Version heißt automatisch eine neue Runde: Genau deshalb
+    hängen die Anregungen an einer Versionsnummer.
+    """
     a = db.artefakt_holen(artefakt_id)
-    von, basis = db.basis_fuer_freigabe(artefakt_id)
-    aktuell = db.aktuelle_version_holen(artefakt_id)["content"]
+    n = a["current_version"]
+
+    schon_da = db.pruefpunkte_holen(artefakt_id, version=n)
+    if schon_da:
+        return sum(1 for p in schon_da if p["status"] == "offen")
+
+    von, basis = db.basis_fuer_reflexion(artefakt_id)
+    aktuell = db.version_holen(artefakt_id, n)["content"]
 
     unterschiede = abschnitte.vergleichen(basis, aktuell, a["type"])
     if not unterschiede:
         return 0
 
+    frueher = "\n".join(
+        f"- {p['abschnitt']}: {p['frage']} → "
+        f"{p['antwort'] or p['begruendung'] or ''}"
+        for p in db.pruefpunkte_geklaert_frueher(artefakt_id, n)
+    )
+
     typ_info = artefakte.typ_holen(a["art_key"])
-    experte = experten.FragenExperte()
-    punkte = experte.pruefpunkte_ableiten(
+    punkte = experten.FragenExperte().pruefpunkte_ableiten(
         a["title"], abschnitte.diff_text(unterschiede),
-        typ_info.prompt_zusatz if typ_info else "",
+        typ_info.prompt_zusatz if typ_info else "", frueher,
     )
 
     chat_id = db.freigabe_chat(artefakt_id)
-    db.pruefpunkte_anlegen(artefakt_id, chat_id, von,
-                           a["current_version"], punkte)
-    db.systemzeile(chat_id, f"Neue Freigaberunde: v{von} → v{a['current_version']}")
+    db.pruefpunkte_anlegen(artefakt_id, chat_id, von, n, punkte)
+    db.systemzeile(chat_id, f"Neue Runde: v{von} → v{n}")
     return len(punkte)
+
+
+def reflexions_lage(artefakt_id):
+    """Wie weit ist das Gespräch über die aktuelle Version?"""
+    n = db.artefakt_holen(artefakt_id)["current_version"]
+    punkte = db.pruefpunkte_holen(artefakt_id, version=n)
+    return {
+        "version": n,
+        "punkte": punkte,
+        "gesamt": len(punkte),
+        "offen": sum(1 for p in punkte if p["status"] == "offen"),
+        "besprochen": sum(1 for p in punkte if p["status"] == "geklaert"),
+        "notiz": db.reflexion_holen(artefakt_id, n),
+    }
 
 
 def freigabe_kopf(artefakt_id):
     lage = artefakt_lage(artefakt_id)
-    offen = len(db.pruefpunkte_holen(artefakt_id, nur_offene=True))
-    stand = ("noch nie freigegeben" if not lage["freigegeben_v"]
-             else f"zuletzt freigegeben: v{lage['freigegeben_v']}")
-    extra = chip(stand)
-    extra += (chip(f"🪞 {offen} Anregungen offen", STUFEN_FARBE["geaendert"])
-              if offen else chip("✓ alles besprochen",
-                                 STUFEN_FARBE["frei"]))
-    return (f"## Reflexion: {lage['symbol']} {lage['titel']}\n"
+    r = reflexions_lage(artefakt_id)
+
+    extra = chip("noch nie fertiggestellt" if not lage["freigegeben_v"]
+                 else f"zuletzt fertig: v{lage['freigegeben_v']}")
+    if r["gesamt"] == 0:
+        extra += chip("noch keine Anregungen")
+    elif r["besprochen"] == 0:
+        extra += chip(f"{r['gesamt']} Anregungen")
+    elif r["offen"]:
+        extra += chip(f"🪞 {r['besprochen']} von {r['gesamt']} besprochen")
+    else:
+        extra += chip(f"🪞 {r['gesamt']} besprochen", STUFEN_FARBE["frei"])
+
+    return (f"## Reflexion: {lage['symbol']} {lage['titel']} · v{r['version']}\n"
             + status_chips(lage, extra))
 
 
@@ -983,7 +1125,7 @@ def freigabe_senden(text, chat_id, artefakt_id, punkt_id, zaehler):
     p = db.pruefpunkt_holen(punkt_id)
     a = db.artefakt_holen(artefakt_id)
     ausschnitt = abschnitte.zerlegen(
-        db.aktuelle_version_holen(artefakt_id)["content"], a["type"]
+        db.arbeitsstand_text(artefakt_id), a["type"]
     ).get(p["abschnitt"], "") or "(Der Abschnitt existiert nicht mehr.)"
 
     # Aufruf 3: strikt bewerten
@@ -1009,7 +1151,7 @@ def freigabe_senden(text, chat_id, artefakt_id, punkt_id, zaehler):
 def notiz_bauen(artefakt_id):
     """Schlichte Reflexionsnotizen aus den Prüfpunkten (LLM-Fassung folgt)."""
     zeilen = []
-    for p in db.pruefpunkte_holen(artefakt_id):
+    for p in reflexions_lage(artefakt_id)["punkte"]:
         wort = {"geklaert": "erläutert", "uebersprungen": "übersprungen",
                 "offen": "offen"}.get(p["status"], p["status"])
         zeilen.append(f"- {p['abschnitt'] or 'Allgemein'}: {p['frage']} "
@@ -1033,7 +1175,8 @@ def notiz_erzeugen(artefakt_id):
 def freigabe_abschliessen(artefakt_id, chat_id, notiz_text):
     if artefakt_id is None:
         return (gr.skip(),) * 4
-    for p in db.pruefpunkte_holen(artefakt_id, nur_offene=True):
+    n = db.artefakt_holen(artefakt_id)["current_version"]
+    for p in db.pruefpunkte_holen(artefakt_id, nur_offene=True, version=n):
         db.pruefpunkt_abschliessen(p["id"], "uebersprungen",
                                    begruendung="ohne Angabe freigegeben")
 
@@ -1045,22 +1188,15 @@ def freigabe_abschliessen(artefakt_id, chat_id, notiz_text):
             gr.update(visible=False))
 
 
-def freigabe_vorbereiten(id_text):
-    if not id_text:
-        return "⚠️ Kein Dokument geladen."
-    anzahl = pruefpunkte_erzeugen(int(id_text))
-    if anzahl == 0:
-        return "Keine Änderungen seit der letzten Reflektion."
-    return f"{anzahl} Anregungen vorbereitet – Fenster wird geöffnet."
-
-
 def dokument_hinweis(artefakt_id):
-    """Systemzeile mit dem aktuellen Dokumentstand."""
+    """Systemzeile mit dem Text, der gerade im Dokument steht."""
     a = db.artefakt_holen(artefakt_id)
-    v = db.aktuelle_version_holen(artefakt_id)
+    stand = db.arbeitsstand_holen(artefakt_id)
+    zusatz = " mit ungesicherten Änderungen" if stand["ungesichert"] else ""
     return {"role": "system",
             "content": (f"Dokument „{a['title']}\" "
-                        f"(Version {a['current_version']}):\n\n{v['content']}")}
+                        f"(Version {stand['version']}{zusatz}):"
+                        f"\n\n{stand['inhalt']}")}
 
 
 # --------------------------------------------------------------------------
@@ -1187,7 +1323,9 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     id_box = gr.Textbox(visible=False)     # Zwischenspeicher für die ID
     kopf_zeile = gr.Textbox(visible=False) # Stempel für die Kopie
     kopie_box = gr.Textbox(visible=False)   # HTML-Fassung für die Kopie
+    oeffner = gr.Textbox(visible=False)     # Auftrag ans JS: Fenster öffnen
     kopf = gr.Markdown(elem_id="dok_kopf")
+    speicher_anzeige = gr.HTML(speicher_html("gespeichert"))
 
 
     # Aktuelle Vorschläge
@@ -1216,7 +1354,7 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                         continue
                     gr.Markdown(f"**{t['abschnitt']}** — *{t['begruendung']}*")
 
-                    veraltet = db.teil_veraltet(aid, v["base_version"],
+                    veraltet = db.teil_veraltet(aid, t["alt"],
                                                 t["abschnitt"], a["type"])
                     if veraltet:
                         gr.Markdown("<span class='warnung'>⚠️ Dieser Abschnitt "
@@ -1224,7 +1362,7 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                                     container=False)
 
                     aktuell = abschnitte.zerlegen(
-                        db.aktuelle_version_holen(aid)["content"], a["type"]
+                        db.arbeitsstand_text(aid), a["type"]
                     ).get(t["abschnitt"], "")
 
                     if not t["alt"]:
@@ -1277,9 +1415,25 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
         with gr.Tab("Bearbeiten"):
             inhalt = gr.Textbox(lines=20, show_label=False, container=False)
     with gr.Row():
-        speichern_btn = gr.Button("Speichern", variant="primary")
+        version_btn = gr.Button("📌 Änderungen festhalten", variant="primary")
         kopieren_btn = gr.Button("📋 Kopieren")
-        freigabe_btn = gr.Button("🪞 Reflektieren & Fertigstellen")
+        freigabe_btn = gr.Button("🪞 Reflektieren")
+        strg_s_btn = gr.Button("Zwischenstand", elem_classes=["versteckt"],
+                               elem_id="btn_strg_s")
+
+    with gr.Column(visible=False, elem_id="versionsfenster") as version_box:
+        version_titel = gr.Markdown(container=False)
+        beschreibung = gr.Textbox(
+            label="Was hast du geändert?",
+            placeholder="z. B. Hypothesen geschärft", lines=1,
+        )
+        with gr.Row():
+            version_zu_btn = gr.Button("Abbrechen", size="sm")
+            version_ok_btn = gr.Button("Festhalten", size="sm",
+                                       variant="primary")
+            version_reflex_btn = gr.Button("🪞 Darüber reflektieren",
+                                           size="sm", visible=False)
+
     meldung = gr.Markdown()
 
 
@@ -1292,9 +1446,9 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                 return
             aid = int(id_text)
             a = db.artefakt_holen(aid)
-            v = db.aktuelle_version_holen(aid)
 
-            for titel, text in abschnitte.zerlegen(v["content"], a["type"]).items():
+            for titel, text in abschnitte.zerlegen(
+                    db.arbeitsstand_text(aid), a["type"]).items():
                 if not text.strip():
                     continue
                 with gr.Row():
@@ -1316,21 +1470,37 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
                 return
             aid = int(id_text)
             a = db.artefakt_holen(aid)
+            offen = db.hat_entwurf(aid)
+
+            # Die Fassung, an der gerade gearbeitet wird. Sie steht noch in
+            # keiner Tabelle, gehört aber ganz nach oben – hier stehst du.
+            with gr.Row():
+                gr.Markdown(
+                    f"**v{a['current_version'] + 1}** · Entwurf · "
+                    + ("*noch nicht beschrieben*" if offen
+                       else "<span class='meta'>noch unverändert</span>"),
+                    container=False,
+                )
+                gr.Button("📌 Festhalten", size="sm", scale=0, min_width=120,
+                          interactive=offen).click(
+                    version_fenster_oeffnen, [id_box, inhalt],
+                    [version_box, version_titel, beschreibung,
+                     version_ok_btn, version_reflex_btn, version_zu_btn],
+                )
 
             for v in db.versionen_holen(aid):
-                aktuell = (v["n"] == a["current_version"])
                 with gr.Row():
                     gr.Markdown(
                         f"**v{v['n']}** · {AUTOR_TEXT.get(v['author'], v['author'])}"
-                        f" · {v['ts'][:16]} · *{v['note'] or ''}*"
-                        + ("  ← aktuell" if aktuell else ""),
+                        f" · {v['ts'][:16]} · "
+                        + (f"*{v['description']}*" if v["description"]
+                           else "<span class='meta'>ohne Namen</span>"),
                         container=False,
                     )
                     ansehen_btn = gr.Button("Ansehen", size="sm",
                                             scale=0, min_width=90)
                     zurueck_btn = gr.Button("Zurücksetzen", size="sm",
-                                            scale=0, min_width=120,
-                                            interactive=not aktuell)
+                                            scale=0, min_width=120)
 
                 # Klick auf "Ansehen" klappt auf – nochmal klicken klappt zu
                 ansehen_btn.click(
@@ -1372,18 +1542,32 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
     # Dokumentenseite laden
     doc_page.load(
         fn=None,
-        js="() => { const id = new URLSearchParams(window.location.search)"
-           ".get('id') || ''; document.title = 'Dokument ' + id; return id; }",
+        js="""() => {
+            if (!window._strgS) {
+                window._strgS = true;
+                document.addEventListener('keydown', (e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                        e.preventDefault();
+                        const k = document.querySelector('#btn_strg_s')
+                               || document.querySelector('.versteckt button');
+                        if (k) k.click();
+                    }
+                });
+            }
+            const id = new URLSearchParams(window.location.search)
+                       .get('id') || '';
+            document.title = 'Dokument ' + id;
+            return id;
+        }""",
         outputs=id_box,
     ).then(
         doc_laden, id_box, [doc_id, kopf, inhalt],
     ).then(
-        editor_sperre, id_box, [inhalt, speichern_btn, freigabe_btn, meldung],
+        editor_sperre, id_box, [inhalt, version_btn, freigabe_btn, meldung],
     )
 
     vorschlag_stand.change(
-        editor_sperre, id_box,
-        [inhalt, speichern_btn, freigabe_btn, meldung],
+        editor_sperre, id_box, [inhalt, version_btn, freigabe_btn, meldung],
     )
     doc_stand.change(
         lambda i: kopfzeile_bauen(int(i)) if i else gr.skip(),
@@ -1428,16 +1612,53 @@ with forschungs_app.route("Dokument", "/doc") as doc_page:
             }
         }""",
     )
-    speichern_btn.click(doc_speichern, [id_box, inhalt], [kopf, meldung])
+    # Speichern läuft von selbst
+    inhalt.input(
+        fn=None,
+        js="() => { const el = document.getElementById('spst');"
+           " if (el) { el.textContent = '• wird gespeichert …';"
+           " el.style.color = 'var(--body-text-color-subdued, #6d6b66)'; } }",
+    )
+    inhalt.blur(auto_speichern, [id_box, inhalt], [kopf, speicher_anzeige])
+    strg_s_btn.click(auto_speichern, [id_box, inhalt], [kopf, speicher_anzeige])
+
+    # Version festhalten
+    # Version festhalten
+    VERSIONS_FELDER = [version_box, version_titel, beschreibung,
+                       version_ok_btn, version_reflex_btn, version_zu_btn]
+
+    version_btn.click(version_fenster_oeffnen, [id_box, inhalt],
+                      VERSIONS_FELDER)
+    version_zu_btn.click(lambda: gr.update(visible=False), None, version_box)
+    version_ok_btn.click(
+        version_festhalten_ui, [id_box, beschreibung],
+        VERSIONS_FELDER + [kopf, doc_stand],
+    )
+
+    # JS steht am Anfang der Kette – sonst blockt der Browser das Fenster
+    version_reflex_btn.click(
+        None, id_box, meldung,
+        js="(id) => { window.open('/freigabe?id=' + id, 'frei' + id);"
+           " return ''; }",
+    ).then(
+        lambda: gr.update(visible=False), None, version_box,
+    )
+
+    # Reflektieren – nur über eine festgehaltene Fassung
+    # JS steht am Anfang der Kette – sonst blockt der Browser das Fenster
     freigabe_btn.click(
-        None,
-        js="() => { const id = new URLSearchParams(window.location.search)"
-           ".get('id'); window.open('/freigabe?id=' + id, 'frei' + id); }",
+        None, [id_box, inhalt], meldung,
+        js="(id, t) => { window.open('/freigabe?id=' + id, 'frei' + id);"
+           " return ''; }",
+    ).then(
+        auto_speichern, [id_box, inhalt], [kopf, speicher_anzeige],
     )
 
     doc_takt = gr.Timer(3)
+    doc_takt.tick(auto_speichern, [id_box, inhalt],
+                  [kopf, speicher_anzeige])   # Netz gegen Datenverlust
     doc_takt.tick(doc_puls, [id_box, vorschlag_stand], vorschlag_stand)
-    doc_takt.tick(version_puls, [id_box, doc_stand], doc_stand) # mehrere tick-Wires möglich und hier sinnvoll :)
+    doc_takt.tick(version_puls, [id_box, doc_stand], doc_stand)
 
 
 
@@ -1451,7 +1672,6 @@ with forschungs_app.route("Reflektieren und Fertigstellen", "/freigabe") as frei
     frei_chat = gr.State(None)        # Freigabe-Chat
     punkt_stand = gr.State(0)         # Zähler fürs Neuzeichnen
     aktiver_punkt = gr.State(None)    # worüber gerade gesprochen wird
-    ueberspringen_offen = gr.State(None)   # welches Begründungsfeld ist auf?
 
     # Components
     frei_id_box = gr.Textbox(visible=False)
@@ -1461,13 +1681,11 @@ with forschungs_app.route("Reflektieren und Fertigstellen", "/freigabe") as frei
         with gr.Column(scale=2):
             gr.Markdown("### Anregungen")
 
-            @gr.render(inputs=[frei_id, punkt_stand, ueberspringen_offen,
-                               aktiver_punkt])
-            def zeige_punkte(aid, _stand, offen_id, aktiv_id):
+            @gr.render(inputs=[frei_id, punkt_stand, aktiver_punkt])
+            def zeige_punkte(aid, _stand, aktiv_id):
                 if aid is None:
                     return
-                a = db.artefakt_holen(aid)
-                punkte = db.pruefpunkte_holen(aid)
+                punkte = reflexions_lage(aid)["punkte"]
                 if not punkte:
                     gr.Markdown("*Keine Anregungen – du kannst direkt "
                                 "fertigstellen.*")
