@@ -9,10 +9,10 @@ import abschnitte
 DB_DATEI = "projekt.db"
 
 SCHRITTE = [
-    (1, "Hypothesen aufstellen"),
-    (2, "Untersuchungsplanung"),
-    (3, "Datenaufbereitung und Analyse"),
-    (4, "Ergebnispräsentation"),
+    (1, "Hypotheses"),
+    (2, "Study design"),
+    (3, "Data preparation and analysis"),
+    (4, "Reporting results"),
     (5, "Interpretation"),
 ]
 
@@ -220,6 +220,14 @@ def einstellung_setzen(key, value):
     conn.commit()
     conn.close()
 
+
+def einstellung_loeschen(key):
+    conn = verbindung()
+    conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+    conn.commit()
+    conn.close()
+
+
 # pro Projekt merken, wo man ist
 def letzten_chat_merken(project_id, chat_id):
     einstellung_setzen(f"letzter_chat_p{project_id}", chat_id)
@@ -251,7 +259,7 @@ def projekt_anlegen(name):
 
     for nummer, titel in SCHRITTE:
         step_id = schritt_anlegen(neue_id, nummer, titel)
-        chat_anlegen(step_id, "Neuer Chat")
+        chat_anlegen(step_id, "New chat")
     # einige Artefakte soll es immer geben
     standard_artefakte_anlegen(neue_id)
     return neue_id
@@ -282,7 +290,7 @@ def freigabe_chat(artefakt_id):
     a = artefakt_holen(artefakt_id)
     schritte = schritte_von_artefakt(artefakt_id)
     step_id = schritte[0]["id"] if schritte else schritte_holen(a["project_id"])[0]["id"]
-    return chat_anlegen(step_id, f"Freigabe: {a['title']}",
+    return chat_anlegen(step_id, f"Reflection: {a['title']}",
                         kind="freigabe", product_id=artefakt_id)
 
 
@@ -324,7 +332,7 @@ def ersten_chat_sichern(project_id):
         return None, None
     s1 = schritte[0]["id"]
     chats = chats_holen(s1)
-    chat_id = chats[0]["id"] if chats else chat_anlegen(s1, "Neuer Chat")
+    chat_id = chats[0]["id"] if chats else chat_anlegen(s1, "New chat")
     return s1, chat_id
 
 # ---------- Artefakte & Versionen ----------
@@ -359,7 +367,7 @@ def artefakt_anlegen(project_id, type, title, content,
         """INSERT INTO versions
            (product_id, n, content, author, ts, description, chat_id)
            VALUES (?, 1, ?, ?, ?, ?, ?)""",
-        (artefakt_id, content, author, zeit, "Erste Version", chat_id)
+        (artefakt_id, content, author, zeit, "Initial version", chat_id)
     )
     conn.commit()
     conn.close()
@@ -412,36 +420,11 @@ def version_zuruecksetzen(artefakt_id, ziel_n, author="human"):
     conn.close()
 
     # 2) diesen Inhalt als neue Version obendrauf legen
-    beschreibung = f"Zurückgesetzt auf Version {ziel_n}"
+    beschreibung = f"Restored from v{ziel_n}"
     neue_n = version_hinzufuegen(artefakt_id, alt["content"], author, beschreibung)
     return neue_n
 
 
-def freigeben(artefakt_id, notiz="", chat_id=None):
-    p = artefakt_holen(artefakt_id)
-    zeit = jetzt()
-    conn = verbindung()
-    conn.execute(
-        "UPDATE products SET freigegebene_version = ?, updated_at = ? WHERE id = ?",
-        (p["current_version"], zeit, artefakt_id)
-    )
-    conn.execute(
-        """INSERT INTO freigaben (product_id, version, chat_id, ts, notiz)
-           VALUES (?, ?, ?, ?, ?)""",
-        (artefakt_id, p["current_version"], chat_id, zeit, notiz)
-    )
-    conn.commit()
-    conn.close()
-
-
-def freigabe_zurueckziehen(artefakt_id):
-    conn = verbindung()
-    conn.execute(
-        "UPDATE products SET freigegebene_version = 0, updated_at = ? WHERE id = ?",
-        (jetzt(), artefakt_id)
-    )
-    conn.commit()
-    conn.close()
 
 # ---------- Vorschläge ----------
 
@@ -569,7 +552,7 @@ def chats_holen(step_id):
 def chat_kurz(chat_id):
     """Schritt und Titel eines Chats – für Herkunftsangaben."""
     if chat_id is None:
-        return "unbekannt"
+        return "unknown"
     conn = verbindung()
     z = conn.execute(
         """SELECT c.title, s."order" AS nr FROM chats c
@@ -577,7 +560,7 @@ def chat_kurz(chat_id):
         (chat_id,)
     ).fetchone()
     conn.close()
-    return f"Schritt {z['nr']} · {z['title']}" if z else "gelöschter Chat"
+    return f"Step {z['nr']} · {z['title']}" if z else "deleted chat"
 
 
 def verlauf_holen(chat_id):
@@ -610,23 +593,6 @@ def artefakt_holen(artefakt_id):
     z = conn.execute("SELECT * FROM products WHERE id = ?", (artefakt_id,)).fetchone()
     conn.close()
     return z
-
-
-def aktuelle_version_holen(artefakt_id):
-    conn = verbindung()
-    # zuerst: welche Versionsnummer ist aktuell?
-    p = conn.execute(
-        "SELECT current_version FROM products WHERE id = ?",
-        (artefakt_id,)
-    ).fetchone()
-
-    # dann: den Inhalt genau dieser Version holen
-    v = conn.execute(
-        "SELECT n, content, author, ts, description FROM versions WHERE product_id = ? AND n = ?",
-        (artefakt_id, p["current_version"])
-    ).fetchone()
-    conn.close()
-    return v
 
 
 # ---------- Arbeitsstand ----------
@@ -721,6 +687,11 @@ def version_festhalten(artefakt_id, beschreibung, chat_id=None):
     neue_n = version_hinzufuegen(artefakt_id, stand["inhalt"], stand["autor"],
                                  beschreibung or "", chat_id=chat_id)
     arbeitsstand_verwerfen(artefakt_id)
+
+    notiz = einstellung_holen(f"reflexnotiz_{artefakt_id}")
+    if notiz:                                   # Reflexion zieht mit um
+        reflexion_speichern(artefakt_id, neue_n, notiz)
+        einstellung_loeschen(f"reflexnotiz_{artefakt_id}")
     return neue_n
 
 
@@ -746,6 +717,22 @@ def reflexion_holen(artefakt_id, n):
     ).fetchone()
     conn.close()
     return (z["reflexion"] if z else "") or ""
+
+
+def reflexionsnotiz_holen(artefakt_id):
+    """Notiz zur Fassung, an der gerade gearbeitet wird."""
+    if hat_entwurf(artefakt_id):
+        return einstellung_holen(f"reflexnotiz_{artefakt_id}") or ""
+    return reflexion_holen(artefakt_id, artefakt_holen(artefakt_id)["current_version"])
+
+
+def reflexionsnotiz_speichern(artefakt_id, text):
+    """Entwurf → Zwischenlager, feste Fassung → versions.reflexion."""
+    if hat_entwurf(artefakt_id):
+        einstellung_setzen(f"reflexnotiz_{artefakt_id}", text)
+    else:
+        reflexion_speichern(artefakt_id,
+                            artefakt_holen(artefakt_id)["current_version"], text)
 
 
 def reflexion_speichern(artefakt_id, n, text):
@@ -792,16 +779,6 @@ def wortwahl_holen(artefakt_id, grenze=12):
             aus.append((von, nach))
     return aus[:grenze]
 
-def artefakt_zustand(artefakt_id):
-    a = artefakt_holen(artefakt_id)
-    stand = arbeitsstand_holen(artefakt_id)
-    if a["freigegebene_version"] == a["current_version"]:
-        freigabe = "fertiggestellt"
-    elif a["freigegebene_version"] > 0:
-        freigabe = f"in Arbeit · zuletzt fertig: v{a['freigegebene_version']}"
-    else:
-        freigabe = "in Arbeit"
-    return freigabe, stand["autor"]        # system | ai | human | uebernommen
 
 def teil_veraltet(artefakt_id, alt_text, abschnitt, typ):
     """Hat sich der Abschnitt geändert, seit die KI ihn gelesen hat?
@@ -840,38 +817,11 @@ def teile_uebernehmen(artefakt_id, teil_ids, chat_id=None):
     return namen
 
 
-def letzte_freigabe(artefakt_id):
-    """Die jüngste Freigabe oder None."""
-    conn = verbindung()
-    z = conn.execute(
-        """SELECT * FROM freigaben WHERE product_id = ?
-           ORDER BY version DESC LIMIT 1""",
-        (artefakt_id,)
-    ).fetchone()
-    conn.close()
-    return z
-
-
-def freigaben_holen(artefakt_id):
-    conn = verbindung()
-    zeilen = conn.execute(
-        """SELECT * FROM freigaben WHERE product_id = ?
-           ORDER BY version DESC""",
-        (artefakt_id,)
-    ).fetchall()
-    conn.close()
-    return zeilen
-
-
-def basis_fuer_reflexion(artefakt_id):
-    """Fassung, gegen die verglichen wird – (versionsnummer, inhalt).
-
-    Das ist die jüngste ältere Version, über die schon gesprochen wurde:
-    entweder liegt eine Reflexionsnotiz an ihr oder es gibt Anregungen zu
-    ihr. Sonst die letzte fertiggestellte, sonst die Vorlage.
-    """
+def basis_fuer_reflexion(artefakt_id, fassung=None):
+    """Fassung, gegen die verglichen wird – (versionsnummer, inhalt)."""
     a = artefakt_holen(artefakt_id)
-    jetzt_n = a["current_version"]
+    if fassung is None:
+        fassung = a["current_version"]
 
     conn = verbindung()
     z = conn.execute(
@@ -881,16 +831,16 @@ def basis_fuer_reflexion(artefakt_id):
                   OR EXISTS (SELECT 1 FROM pruefpunkte p
                              WHERE p.product_id = v.product_id
                                AND p.bis_version = v.n))""",
-        (artefakt_id, jetzt_n)
+        (artefakt_id, fassung)
     ).fetchone()
     conn.close()
 
-    n = (z["n"] if z and z["n"] else 0) or a["freigegebene_version"]
+    n = z["n"] if z and z["n"] else 0
     if n > 0:
         return n, version_holen(artefakt_id, n)["content"]
 
     erste = version_holen(artefakt_id, 1)
-    if erste and erste["author"] == "system" and jetzt_n > 1:
+    if erste and erste["author"] == "system" and fassung > 1:
         return 1, erste["content"]
     return 0, ""
 
@@ -1058,16 +1008,6 @@ def artefakt_schritt_zuordnen(artefakt_id, step_id):
     # durch OR IGNORE passiert einfach nichts, wenn product_id step_id Kombi schon existiert
     conn.execute(
         "INSERT OR IGNORE INTO product_steps (product_id, step_id) VALUES (?, ?)",
-        (artefakt_id, step_id)
-    )
-    conn.commit()
-    conn.close()
-
-# löst Artefakt von einem Schritt - TODO: prüfen, ob nötig
-def artefakt_schritt_loesen(artefakt_id, step_id):
-    conn = verbindung()
-    conn.execute(
-        "DELETE FROM product_steps WHERE product_id = ? AND step_id = ?",
         (artefakt_id, step_id)
     )
     conn.commit()

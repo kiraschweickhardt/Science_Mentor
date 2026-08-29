@@ -26,12 +26,12 @@ KATALOG = [
         schritte=[1, 2],
         typ="text",
         vorlage=(
-            "## Fragestellung und Hypothesen\n\n_(offen)_\n\n"
-            "## Stichprobe\n\n_(offen)_\n\n"
-            "## Ausschlusskriterien\n\n_(offen)_\n\n"
-            "## Erhebungsdesign\n\n_(offen)_\n\n"
-            "## Instrumente und Messung\n\n_(offen)_\n\n"
-            "## Analyseplan\n\n_(offen)_\n"
+            "## Research question and hypotheses\n\n_(open)_\n\n"
+            "## Sample\n\n_(open)_\n\n"
+            "## Exclusion criteria\n\n_(open)_\n\n"
+            "## Study design\n\n_(open)_\n\n"
+            "## Instruments and measurement\n\n_(open)_\n\n"
+            "## Analysis plan\n\n_(open)_\n"
         ),
         prompt_zusatz=(
             "Schreibe im Präsens und in Planungssprache. "
@@ -45,7 +45,7 @@ KATALOG = [
         schritte=[2],
         typ="tabelle",
         vorlage=(
-            "| Variable | Bedeutung | Skalenniveau | Werte | Missings |\n"
+            "| Variable | Meaning | Scale | Values | Missings |\n"
             "|---|---|---|---|---|\n"
             "|  |  |  |  |  |\n"
         ),
@@ -61,12 +61,12 @@ KATALOG = [
         schritte=[3],
         typ="code",
         vorlage=(
-            "# 1 Daten einlesen\n\n"
-            "# 2 Datenaufbereitung\n\n"
-            "# 3 Deskriptive Statistik\n\n"
-            "# 4 Voraussetzungsprüfungen\n\n"
-            "# 5 Statistische Analysen\n\n"
-            "# 6 Tabellen und Abbildungen\n"
+            "# 1 Load data\n\n"
+            "# 2 Data preparation\n\n"
+            "# 3 Descriptive statistics\n\n"
+            "# 4 Assumption checks\n\n"
+            "# 5 Statistical analyses\n\n"
+            "# 6 Tables and figures\n"
         ),
         prompt_zusatz=(
             "Behalte die nummerierte Abschnittsstruktur bei. "
@@ -81,10 +81,10 @@ KATALOG = [
         schritte=[4, 5],
         typ="text",
         vorlage=(
-            "## Stichprobenbeschreibung\n\n_(offen)_\n\n"
-            "## Deskriptive Ergebnisse\n\n_(offen)_\n\n"
-            "## Hypothesenprüfung\n\n_(offen)_\n\n"
-            "## Tabellen und Abbildungen\n\n_(offen)_\n"
+            "## Sample description\n\n_(open)_\n\n"
+            "## Descriptive results\n\n_(open)_\n\n"
+            "## Hypothesis tests\n\n_(open)_\n\n"
+            "## Tables and figures\n\n_(open)_\n"
         ),
         prompt_zusatz=(
             "Berichte Kennwerte vollständig (Teststatistik, df, p, Effektstärke). "

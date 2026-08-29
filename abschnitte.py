@@ -112,7 +112,6 @@ def diff_text(unterschiede, max_zeichen=1200):
 
 def wortwechsel(alt, neu, min_laenge=3):
     """Findet kurze Wortersetzungen zwischen zwei Fassungen: [(vorher, nachher)]."""
-    import difflib
     a, b = alt.split(), neu.split()
     paare = []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():

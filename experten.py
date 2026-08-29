@@ -12,6 +12,10 @@ client = OpenAI(
     base_url="https://gpt.uni-muenster.de/v1",   # None = Standard-Endpunkt
 )
 
+# Sprache der Antworten. Die Prompts selbst bleiben deutsch – diese
+# eine Zeile reicht, um das Modell umzustellen.
+SPRACHE = "Answer in English!"
+
 PRUEFPUNKT_SCHEMA = {
     "name": "pruefpunkte",
     "strict": True,
@@ -151,7 +155,7 @@ class Experte:
 
     def antworten(self, verlauf, ausfuehren=None):
         """Antwortet. Wird 'ausfuehren' übergeben, darf das Modell Werkzeuge nutzen."""
-        nachrichten = [{"role": "system", "content": self.system_prompt}] + verlauf
+        nachrichten = [{"role": "system", "content": self.system_prompt + " " + SPRACHE}] + verlauf
 
         for _ in range(4):                     # höchstens 4 Werkzeugrunden
             anfrage = {
@@ -195,7 +199,7 @@ class Experte:
             messages=[
                 {"role": "system", "content":
                  "Fasse die Anfrage in maximal 5 Wörtern als Chattitel zusammen. "
-                 "Nur der Titel, keine Anführungszeichen."},
+                 "Nur der Titel, keine Anführungszeichen. " + SPRACHE},
                 {"role": "user", "content": erste_nachricht},
             ],
             temperature=0.3,
@@ -205,7 +209,7 @@ class Experte:
     def artefakt_erstellen(self, verlauf, titel):
         auftrag = f"{self.artefakt_prompt}\n\nTitel des Dokuments: {titel}"
         nachrichten = (
-            [{"role": "system", "content": self.system_prompt}]
+            [{"role": "system", "content": self.system_prompt+ " " + SPRACHE}]
             + verlauf
             + [{"role": "user", "content": auftrag}]
         )
@@ -296,7 +300,7 @@ class FragenExperte(Experte):
     
 
     def pruefpunkte_ableiten(self, artefakt_titel, unterschiede_text,
-                             prompt_zusatz="", frueher=""):
+                             prompt_zusatz="", frueher="", bereits=""):
         vorher = (
             "\n\nDas wurde in früheren Runden bereits begründet:\n"
             f"{frueher}\n"
@@ -304,12 +308,19 @@ class FragenExperte(Experte):
             "stellt die damalige Begründung infrage.\n"
         ) if frueher else ""
 
+        offen = (
+            "\n\nZu dieser Fassung stehen diese Fragen schon auf der Liste:\n"
+            f"{bereits}\n"
+            "Wiederhole sie nicht. Nenne nur, was dabei noch fehlt – "
+            "gibt es nichts, gib eine leere Liste zurück.\n"
+        ) if bereits else ""
+
         auftrag = (
             f"An dem Dokument „{artefakt_titel}\" wurde weitergearbeitet.\n"
             f"{prompt_zusatz}\n\n"
             "Das hat sich geändert:\n"
             f"---\n{unterschiede_text}\n---\n"
-            f"{vorher}\n"
+            f"{vorher}{offen}\n"
             "Suche die Knackpunkte: Entscheidungen, bei denen es "
             "erfahrungsgemäß schiefgeht, die später schwer zu revidieren "
             "sind oder die eine Gutachterin als Erstes hinterfragen würde. "
@@ -333,7 +344,7 @@ class FragenExperte(Experte):
         antwort = client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": self.system_prompt},
+                {"role": "system", "content": self.system_prompt + " " + SPRACHE},
                 {"role": "user", "content": auftrag},
             ],
             temperature=self.temperature,
@@ -370,7 +381,7 @@ class FragenExperte(Experte):
         antwort = client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": self.pruef_prompt},
+                {"role": "system", "content": self.pruef_prompt + " " + SPRACHE},
                 {"role": "user", "content": auftrag},
             ],
             temperature=0.1,
@@ -392,7 +403,7 @@ class FragenExperte(Experte):
         antwort = client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": self.notiz_prompt},
+                {"role": "system", "content": self.notiz_prompt + " " + SPRACHE},
                 {"role": "user", "content": auftrag},
             ],
             temperature=0.3,
