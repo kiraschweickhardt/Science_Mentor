@@ -563,6 +563,14 @@ def chat_kurz(chat_id):
     return f"Step {z['nr']} · {z['title']}" if z else "deleted chat"
 
 
+def chat_titel_holen(chat_id):
+    conn = verbindung()
+    z = conn.execute("SELECT title FROM chats WHERE id = ?",
+                     (chat_id,)).fetchone()
+    conn.close()
+    return z["title"] if z else ""
+
+
 def verlauf_holen(chat_id):
     conn = verbindung()
     zeilen = conn.execute(
@@ -981,6 +989,20 @@ def pruefpunkt_abschliessen(punkt_id, status, antwort="", begruendung=""):
     )
     conn.commit()
     conn.close()
+
+
+def pruefpunkt_wieder_oeffnen(punkt_id):
+    """Holt eine abgeschlossene Anregung zurück auf offen.
+
+    Antwort und Begründung bleiben stehen – falls die Person es sich
+    wieder anders überlegt, ist nichts verloren.
+    """
+    conn = verbindung()
+    conn.execute("UPDATE pruefpunkte SET status = 'offen' WHERE id = ?",
+                 (punkt_id,))
+    conn.commit()
+    conn.close()
+
 
 # --------------------------------------------------------------------------
 # Aus der Datenbank löschen

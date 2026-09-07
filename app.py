@@ -5,8 +5,10 @@ import experten
 import artefakte
 import abschnitte
 import difflib
+import hashlib
 import traceback
 import time
+import re
 
 
 # --------------------------------------------------------------------------
@@ -160,7 +162,7 @@ CSS = """
 #statuszeile p { margin: 0 !important; }
 
 /* --- Versionsfenster: schwebt über der Seite ------------------------- */
-#versionsfenster {
+#versionsfenster, #restorefenster {
     position: fixed !important;
     top: 12vh;
     left: 50%;
@@ -197,6 +199,8 @@ footer { display: none !important; }
 
 /* Seiten-Navigation der Mehrseiten-App ausblenden */
 nav.fillable { display: none !important; }
+
+.diffbox, .diffbox span { white-space: pre-wrap !important; }
 """
 
 # Modell-Sprache, nicht Oberfläche: AUTOR_TEXT steckt nur noch in
@@ -296,7 +300,20 @@ def titel_saeubern(roh, grenze=45):
     text = text.strip(" \"„“'*#:-").strip()        # Anführung, Markdown weg
     if len(text) > grenze:
         text = text[:grenze].rstrip() + "…"
-    return text or "New Chat"
+    return text or "New chat"
+
+
+def titel_aus_text(text, woerter=5):
+    """Notnagel: die ersten Wörter der Nachricht."""
+    stuecke = (text or "").strip().split()
+    if not stuecke:
+        return "New chat"
+    return " ".join(stuecke[:woerter])[:45].rstrip(" ,.;:") or "New chat"
+
+
+def namenlos(titel):
+    """Trägt der Chat noch einen Platzhalternamen?"""
+    return (titel or "").strip().lower() in ("", "new chat", "neuer chat")
 
 
 def nachricht_senden(text, chat_id, zaehler):
@@ -312,12 +329,17 @@ def nachricht_senden(text, chat_id, zaehler):
     schritt = db.schritt_von_chat(chat_id)
     experte = experten.experte_fuer(schritt["order"])
 
-    # 2. Beim ersten Beitrag: Chat automatisch benennen
-    if len(db.verlauf_holen(chat_id)) == 1:
-        db.chat_umbenennen(
-            chat_id, titel_saeubern(experte.titel_vorschlagen(text))
-        )
-
+    # 2. Benennen, solange der Chat namenlos ist
+    if namenlos(db.chat_titel_holen(chat_id)):
+        try:
+            neuer = titel_saeubern(experte.titel_vorschlagen(text))
+        except Exception:
+            traceback.print_exc()
+            neuer = ""
+        if namenlos(neuer):
+            neuer = titel_aus_text(text)
+        print(f"[Chatname] {chat_id} → {neuer}")     # zum Mitlesen
+        db.chat_umbenennen(chat_id, neuer)
 
     # 3. Verlauf holen
     verlauf = db.verlauf_fuer_openai(chat_id)
@@ -325,17 +347,23 @@ def nachricht_senden(text, chat_id, zaehler):
     # 4. Überblick über die Artefakte (Inhalte holt sich das Modell selbst)
     verlauf.append(regal_hinweis(chat_id))
 
-    # 5. Antwort holen und speichern
+    # 5. Antwort holen. Werkzeug-Notizen werden gesammelt und erst danach
+    #    geschrieben – sonst stünden sie über der Antwort, obwohl sie
+    #    währenddessen passiert sind.
+    notizen = []
     antwort = experte.antworten(
         verlauf,
-        ausfuehren=lambda name, args: werkzeug_ausfuehren(chat_id, name, args),
+        ausfuehren=lambda name, args:
+            werkzeug_ausfuehren(chat_id, name, args, notizen),
     )
     db.nachricht_speichern(chat_id, "assistant", antwort)
+    for zeile in notizen:
+        db.systemzeile(chat_id, zeile)
 
     return "", verlauf_laden(chat_id), zaehler + 1
 
 def chat_anlegen_ui(step_id):
-    neue_id = db.chat_anlegen(step_id, "New Chat")
+    neue_id = db.chat_anlegen(step_id, "New chat")
     return neue_id, step_id
 
 def chat_loeschen_ui(chat_id, step_id, aktiver_chat, zaehler):
@@ -700,16 +728,31 @@ def regal_hinweis(chat_id):
             + "\n\nInhalte holst du dir mit artefakt_lesen. Änderungen schlägst "
               "du mit vorschlag_anlegen vor und nennst dabei immer den Titel. "
               "Dokumente mit 🔒 sind gesperrt, bis die Person die offenen "
-              "Vorschläge bearbeitet hat.")
+              "Vorschläge bearbeitet hat."
+              "\n\nWann du nicht schreibst: Solange etwas noch offen ist, "
+              "gehört es ins Gespräch und nicht ins Dokument. Offen ist "
+              "aber nur, was du ohne eine weitere Auskunft der Person nicht "
+              "formulieren kannst. Was sie selbst schon klar und mit "
+              "Richtung gesagt hat, ist geklärt – das trägst du ein, ohne "
+              "vorher zu fragen, ob du darfst. Sie entscheidet ohnehin im "
+              "Dokumentfenster Abschnitt für Abschnitt. "
+              "Ein Vorschlag "
+              "enthält nie einen Platzhalter, nie eine Bedingung („abhängig "
+              "davon, ob …“) und nie eine Bemerkung darüber, was noch fehlt. "
+              "Wenn du nichts Fertiges hast, stellst du deine Frage und "
+              "benutzt das Werkzeug in dieser Runde einfach nicht. Nichts zu "
+              "schreiben ist kein Versäumnis.")
     return {"role": "system", "content": text}
 
 
-def werkzeug_ausfuehren(chat_id, name, argumente):
+def werkzeug_ausfuehren(chat_id, name, argumente, notizen=None):
     """Weiche: welcher Werkzeugwunsch wird wie ausgeführt?"""
     if name == "vorschlag_anlegen":
-        return wz_vorschlag_anlegen(chat_id, argumente)
+        return wz_vorschlag_anlegen(chat_id, argumente, notizen)
     if name == "artefakt_lesen":
         return wz_artefakt_lesen(chat_id, argumente)
+    if name == "experte_fragen":
+        return wz_experte_fragen(chat_id, argumente, notizen)
     return f"Unbekanntes Werkzeug: {name}"
 
 
@@ -731,7 +774,66 @@ def wz_artefakt_lesen(chat_id, argumente):
             + stil_hinweis(treffer["id"], treffer["type"], treffer["art_key"]))
 
 
-def wz_vorschlag_anlegen(chat_id, argumente):
+def wz_experte_fragen(chat_id, argumente, notizen=None):
+    """Holt die Einschätzung eines Experten aus einem anderen Schritt.
+
+    Der befragte Experte bekommt bewusst kein ausfuehren-Callback: Er kann
+    weder Dokumente lesen noch Vorschläge anlegen. Er antwortet nur auf
+    das, was der fragende Experte ihm mitgibt – eine Stimme, kein zweiter
+    Handelnder.
+    """
+    try:
+        nummer = int(argumente.get("schritt"))
+    except (TypeError, ValueError):
+        nummer = 0
+    if nummer not in experten.EXPERTEN:
+        return ("Fehlgeschlagen: Es gibt nur die Schritte 1 bis 5. "
+                "Gib die Nummer des Schritts an.")
+
+    eigener = db.schritt_von_chat(chat_id)["order"]
+    if nummer == eigener:
+        return ("Fehlgeschlagen: Das ist dein eigener Schritt – "
+                "diese Frage beantwortest du selbst.")
+
+    frage = (argumente.get("frage") or "").strip()
+    if not frage:
+        return "Fehlgeschlagen: keine Frage angegeben."
+
+    kollege = experten.experte_fuer(nummer)
+    kontext = (argumente.get("kontext") or "").strip()
+    auftrag = (
+        f"Der Experte aus Schritt {eigener} fragt dich fachlich an. "
+        "Du siehst das Gespräch nicht und hast keine Dokumente vorliegen. "
+        "Antworte nur auf das Genannte und sage klar, wenn dir etwas fehlt, "
+        "um die Frage zu beantworten. Zwei bis vier Sätze, keine Liste von "
+        "Rückfragen.\n\n"
+        f"Frage: {frage}\n\n"
+        f"Kontext: {kontext or '(nichts angegeben)'}"
+    )
+    antwort = kollege.antworten([{"role": "user", "content": auftrag}])
+
+    zeile = f"🔗 consulted the step {nummer} expert ({kollege.name})"
+    if notizen is None:
+        db.systemzeile(chat_id, zeile)
+    else:
+        notizen.append(zeile)
+
+    return (f"Antwort des Experten für Schritt {nummer} ({kollege.name}):\n\n"
+            f"{antwort}\n\n"
+            "Gib das Wesentliche an die Person weiter und sage dazu, dass die "
+            f"Einschätzung aus Schritt {nummer} stammt. Übernimm sie nicht "
+            "ungeprüft in ein Dokument.")
+
+
+def wz_vorschlag_anlegen(chat_id, argumente, notizen=None):
+    def merken(text):
+        """Systemzeile für den Chat. Liegt eine Sammelliste vor, wandert
+        die Zeile dorthin und wird erst nach der Antwort geschrieben."""
+        if notizen is None:
+            db.systemzeile(chat_id, text)
+        else:
+            notizen.append(text)
+
     a = artefakt_finden(chat_id, argumente.get("titel"))
     if a is None:
         return ("Fehlgeschlagen: Kein Dokument mit diesem Titel. Vorhanden sind: "
@@ -772,8 +874,8 @@ def wz_vorschlag_anlegen(chat_id, argumente):
 
     db.vorschlag_anlegen(a["id"], a["current_version"], chat_id,
                          argumente.get("summary", ""), teile)
-    db.systemzeile(chat_id, f"Vorschlag für {a['title']} erstellt "
-                            f"({len(teile)} Abschnitte)")
+    merken(f"💡 Suggestion for “{a['title']}” · {len(teile)} section(s) · "
+           "open the document to decide")
 
     rueck = (f"Vorschlag mit {len(teile)} Abschnitten angelegt "
              f"(Basis: Version {a['current_version']}). "
@@ -782,12 +884,12 @@ def wz_vorschlag_anlegen(chat_id, argumente):
         rueck += (f" Achtung: {', '.join(unbekannt)} passt zu keiner vorhandenen "
                   f"Überschrift und wird als neuer Abschnitt ans Ende gestellt. "
                   f"Vorhanden sind: {', '.join(vorhandene)}.")
-    fremd = fremder_schritt(chat_id, a["id"]) # gehört das Artefakt gar nicht in den eigenen Expertisebereich? dann Warnung!
+
+    fremd = fremder_schritt(chat_id, a["id"])
     if fremd:
-        gr.Warning(f"„{a['title']}“ gehört zu Schritt {fremd} – "
-                   f"dort sitzt der zuständige Experte.")
-        db.systemzeile(chat_id, f"⚠️ Schrittübergreifend bearbeitet: "
-                                f"„{a['title']}“ gehört zu Schritt {fremd}")
+        gr.Warning(f"“{a['title']}” belongs to step {fremd} – "
+                   "that's where the responsible expert sits.")
+        merken(f"⚠️ “{a['title']}” belongs to step {fremd}, not to this one")
         rueck += (f" Wichtig: Dieses Dokument gehört zu Schritt {fremd}, nicht "
                   "zu deinem. Weise die Person ausdrücklich darauf hin, dass "
                   "sie den Vorschlag besser mit dem dortigen Experten prüft.")
@@ -798,21 +900,38 @@ def wz_vorschlag_anlegen(chat_id, argumente):
     return rueck
 
 
-# neuen Text als Vorschlag erkennen
+def _stuecke(text):
+    """Wörter und Zeilenumbrüche als einzelne Bausteine."""
+    return re.findall(r"\n|\S+", text)
+
+
+def _zusammen(teile):
+    """Bausteine zurück zu Text – kein Leerzeichen vor einem Umbruch."""
+    aus = []
+    for s in teile:
+        if s == "\n":
+            aus.append("\n")
+        else:
+            if aus and aus[-1] != "\n":
+                aus.append(" ")
+            aus.append(s)
+    return "".join(aus)
+
+
 def diff_paare(alt, neu):
     """Liste von (text, marker) für gr.HighlightedText."""
-    a, b = alt.split(), neu.split()
+    a, b = _stuecke(alt), _stuecke(neu)
     aus = []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
         if op == "equal":
-            aus.append((" ".join(a[i1:i2]) + " ", None))
+            aus.append((_zusammen(a[i1:i2]) + " ", None))
         elif op == "delete":
-            aus.append((" ".join(a[i1:i2]) + " ", "-"))
+            aus.append((_zusammen(a[i1:i2]) + " ", "-"))
         elif op == "insert":
-            aus.append((" ".join(b[j1:j2]) + " ", "+"))
+            aus.append((_zusammen(b[j1:j2]) + " ", "+"))
         elif op == "replace":
-            aus.append((" ".join(a[i1:i2]) + " ", "-"))
-            aus.append((" ".join(b[j1:j2]) + " ", "+"))
+            aus.append((_zusammen(a[i1:i2]) + " ", "-"))
+            aus.append((_zusammen(b[j1:j2]) + " ", "+"))
     return aus
 
 
@@ -943,6 +1062,14 @@ def speicher_html(zustand="gespeichert"):
             f"{text}</span><!--{time.time()}-->")
 
 
+def notiz_stand_html(gespeichert=True):
+    """Kleine Zeile neben der Zusammenfassung – wie ✓ saved im Dokument."""
+    text, farbe = (("✓ saved", "var(--status-frei)") if gespeichert
+                   else ("• unsaved", "var(--body-text-color-subdued)"))
+    return (f"<span id='nstat' style='font-size:0.75em; color:{farbe};'>"
+            f"{text}</span><!--{time.time()}-->")
+
+
 def stand_ablegen(id_text, text):
     """Editorinhalt in den Arbeitsstand. True, wenn sich etwas geändert hat.
 
@@ -1017,7 +1144,10 @@ def version_festhalten_ui(id_text, beschreibung_text):
                                    or "no description")
     titel = ("**Nothing to save**  \nThere were no changes."
              if n is None else
-             f"**v{n} saved**  \nYou are now working on v{n + 1}.")
+             f"**v{n} saved**  \nYou are now working on v{n + 1}."
+             + ("  \n" + klein("Your reflection summary is now attached "
+                               f"to v{n} in the history.")
+                if db.reflexion_holen(aid, n) else ""))
     return (gr.skip(), titel,
             gr.update(visible=False), gr.update(visible=False),
             gr.update(visible=False), gr.update(visible=False),
@@ -1069,6 +1199,46 @@ def zuruecksetzen_ui(artefakt_id, ziel_n):
     return kopfzeile_bauen(artefakt_id), neu, doc_signatur(artefakt_id)
 
 
+# Die drei bedienen zusammen das Restore-Fenster.
+# Ausgänge: restore_box, restore_titel, restore_ziel, kopf, inhalt, doc_stand
+
+def restore_pruefen(id_text, ziel_n, text):
+    """Klick auf „Restore": liegt Ungesichertes im Weg?"""
+    if not id_text:
+        return (gr.skip(),) * 6
+    aid = int(id_text)
+    stand_ablegen(id_text, text)          # erst sichern, was im Editor steht
+
+    if not db.hat_entwurf(aid):           # nichts zu verlieren
+        kopf_neu, inhalt_neu, sig = zuruecksetzen_ui(aid, ziel_n)
+        return gr.update(visible=False), "", None, kopf_neu, inhalt_neu, sig
+
+    lage = artefakt_lage(aid)
+    return (gr.update(visible=True),
+            f"**Restore v{ziel_n}?**  \n"
+            + klein(f"You have unsaved changes in v{lage['arbeitsfassung']}. "
+                    f"Restoring replaces the editor with the text of v{ziel_n}."),
+            ziel_n, gr.skip(), gr.skip(), gr.skip())
+
+
+def restore_mit_sicherung(id_text, ziel_n):
+    """Erst den Entwurf als Version wegheften, dann zurücksetzen."""
+    if not id_text or ziel_n is None:
+        return (gr.skip(),) * 4
+    aid = int(id_text)
+    db.version_festhalten(aid, f"kept before restoring v{ziel_n}")
+    kopf_neu, inhalt_neu, sig = zuruecksetzen_ui(aid, ziel_n)
+    return gr.update(visible=False), kopf_neu, inhalt_neu, sig
+
+
+def restore_ohne_sicherung(id_text, ziel_n):
+    if not id_text or ziel_n is None:
+        return (gr.skip(),) * 4
+    aid = int(id_text)
+    kopf_neu, inhalt_neu, sig = zuruecksetzen_ui(aid, ziel_n)
+    return gr.update(visible=False), kopf_neu, inhalt_neu, sig
+
+
 def version_puls(id_text, alter_stand):
     if not id_text:
         return gr.skip()
@@ -1080,11 +1250,24 @@ def reflexions_marke(artefakt_id, n, notiz=""):
     """🪞-Vermerk einer Version für die Historie – oder leer."""
     punkte = db.pruefpunkte_holen(artefakt_id, version=n)
     if not punkte:
-        return "🪞 note" if notiz else ""
+        return "🪞 summary" if notiz else ""
     offen = sum(1 for p in punkte if p["status"] == "offen")
-    if offen:
-        return f"🪞 {len(punkte) - offen} of {len(punkte)} discussed"
-    return f"🪞 {len(punkte)} discussed"
+    return f"🪞 {len(punkte) - offen}/{len(punkte)}"
+
+
+def reflexions_rueckblick(artefakt_id, n):
+    """Was bei dieser Version besprochen wurde – für die Historie."""
+    punkte = db.pruefpunkte_holen(artefakt_id, version=n)
+    if not punkte:
+        return ""
+    zeilen = []
+    for p in punkte:
+        zeichen = {"geklaert": "✅", "uebersprungen": "↷"}.get(p["status"], "⬜")
+        text = p["antwort"] or p["begruendung"] or ""
+        zeilen.append(f"{zeichen} **{p['abschnitt'] or 'General'}** — "
+                      f"{p['frage']}"
+                      + (f"  \n{klein(text)}" if text else ""))
+    return "\n\n".join(zeilen)
 
 
 def reflexions_fassung(artefakt_id):
@@ -1124,6 +1307,7 @@ def pruefpunkte_erzeugen(artefakt_id, erneut=False):
     punkte = experten.FragenExperte().pruefpunkte_ableiten(
         a["title"], abschnitte.diff_text(unterschiede),
         typ_info.prompt_zusatz if typ_info else "", frueher, bereits,
+        dokument=aktuell,
     )
 
     db.pruefpunkte_anlegen(artefakt_id, db.freigabe_chat(artefakt_id),
@@ -1158,25 +1342,26 @@ def freigabe_kopf(artefakt_id):
 
 def freigabe_laden(id_text):
     if not id_text:
-        return None, None, "## No document selected", [], gr.skip()
+        return None, None, "## No document selected", [], "", gr.skip(), ""
     aid = int(id_text)
     pruefpunkte_erzeugen(aid)
     chat_id = db.freigabe_chat(aid)
     notiz = db.reflexionsnotiz_holen(aid)
     return (aid, chat_id, freigabe_kopf(aid), verlauf_laden(chat_id),
-            gr.update(value=notiz, visible=bool(notiz)))
+            notiz, gr.update(open=bool(notiz)), text_stand(aid))
 
 
 def punkt_besprechen(punkt_id, chat_id, zaehler):
     """Stellt die Frage des Prüfpunkts in den Chat."""
     p = db.pruefpunkt_holen(punkt_id)
     db.nachricht_speichern(chat_id, "assistant", p["frage"])
-    return punkt_id, verlauf_laden(chat_id), zaehler + 1
+    return (punkt_id, verlauf_laden(chat_id), zaehler + 1,
+            gr.update(visible=False))
 
 
 def freigabe_senden(text, chat_id, artefakt_id, punkt_id, zaehler):
     if chat_id is None or not text.strip():
-        return (gr.skip(),) * 5
+        return (gr.skip(),) * 6
 
     db.nachricht_speichern(chat_id, "user", text)
     experte = experten.FragenExperte()
@@ -1185,32 +1370,74 @@ def freigabe_senden(text, chat_id, artefakt_id, punkt_id, zaehler):
     if not punkt_id:
         verlauf = db.verlauf_fuer_openai(chat_id) + [dokument_hinweis(artefakt_id)]
         db.nachricht_speichern(chat_id, "assistant", experte.antworten(verlauf))
-        return "", verlauf_laden(chat_id), zaehler + 1, gr.skip(), gr.skip()
+        return ("", verlauf_laden(chat_id), zaehler + 1,
+                gr.skip(), gr.skip(), gr.skip())
 
     p = db.pruefpunkt_holen(punkt_id)
     a = db.artefakt_holen(artefakt_id)
     ausschnitt = abschnitte.zerlegen(
         db.arbeitsstand_text(artefakt_id), a["type"]
-    ).get(p["abschnitt"], "") or "(Der Abschnitt existiert nicht mehr.)"
+    ).get(p["abschnitt"], "") or "(This section no longer exists.)"
 
-    # Aufruf 3: strikt bewerten
     urteil = experte.antwort_bewerten(p["frage"], text, ausschnitt)
+    ergebnis = urteil.get("ergebnis", "offen")
 
-    if urteil["geklaert"]:
+    # Ein Grund liegt vor – erledigt.
+    if ergebnis == "geklaert":
         db.pruefpunkt_abschliessen(
             punkt_id, "geklaert",
             antwort=urteil["verdichtung"], begruendung=urteil["begruendung"],
         )
         db.nachricht_speichern(chat_id, "assistant",
-                               f"Notiert: {urteil['verdichtung']}")
+                               f"Noted: {urteil['verdichtung']}")
         return ("", verlauf_laden(chat_id), zaehler + 1,
-                None, freigabe_kopf(artefakt_id))
+                None, freigabe_kopf(artefakt_id), gr.update(visible=False))
 
-    # Aufruf 2: nachfragen
+    # Kein Grund: nicht nachbohren. Die Person entscheidet, wie es weitergeht.
+    if ergebnis == "kein_grund":
+        db.nachricht_speichern(
+            chat_id, "assistant",
+            "That is an honest answer, and it is worth having on record. "
+            "Would you like to keep it as it is, or revise it?")
+        return ("", verlauf_laden(chat_id), zaehler + 1,
+                gr.skip(), gr.skip(), gr.update(visible=True))
+
+    # Etwas fehlt noch – eine Nachfrage.
     nachfrage = experte.nachfragen(db.verlauf_fuer_openai(chat_id),
                                    p["frage"], urteil["luecke"])
     db.nachricht_speichern(chat_id, "assistant", nachfrage)
-    return "", verlauf_laden(chat_id), zaehler + 1, gr.skip(), gr.skip()
+    return ("", verlauf_laden(chat_id), zaehler + 1,
+            gr.skip(), gr.skip(), gr.update(visible=False))
+
+
+def kein_grund_behalten(artefakt_id, punkt_id, chat_id, zaehler):
+    """Bewusst so gelassen – ohne Grund, und genau das steht dann da."""
+    if punkt_id is None:
+        return (gr.skip(),) * 5
+    db.pruefpunkt_abschliessen(
+        punkt_id, "geklaert",
+        antwort="Kept deliberately – no reason given.",
+        begruendung="Die Person hat den Punkt bewusst so belassen.")
+    db.nachricht_speichern(chat_id, "assistant",
+                           "Recorded as a deliberate choice.")
+    return (zaehler + 1, freigabe_kopf(artefakt_id), verlauf_laden(chat_id),
+            None, gr.update(visible=False))
+
+
+def kein_grund_ueberarbeiten(artefakt_id, punkt_id, chat_id, zaehler):
+    """Die Person nimmt den Einwand an – geändert wird im Dokumentfenster."""
+    if punkt_id is None:
+        return (gr.skip(),) * 5
+    db.pruefpunkt_abschliessen(
+        punkt_id, "geklaert",
+        antwort="Accepted – to be revised in the document.",
+        begruendung="Die Person hat den Punkt angenommen.")
+    db.nachricht_speichern(
+        chat_id, "assistant",
+        "Noted. Make the change in the document window – then come back "
+        "and press 🔄 so I can look at it again.")
+    return (zaehler + 1, freigabe_kopf(artefakt_id), verlauf_laden(chat_id),
+            None, gr.update(visible=False))
 
 
 def notiz_bauen(artefakt_id):
@@ -1225,33 +1452,48 @@ def notiz_bauen(artefakt_id):
 
 
 def notiz_erzeugen(artefakt_id):
+    """Entwirft die Zusammenfassung aus den Challenges – und sichert sie."""
     if artefakt_id is None:
-        return gr.skip(), "⚠️ No document loaded."
+        return (gr.skip(),) * 3
     a = db.artefakt_holen(artefakt_id)
     roh = notiz_bauen(artefakt_id)
     if roh == "Keine Anregungen.":
-        text = "Your draft is beyond challenging🥳"
+        text = "There were no challenges for this version."
     else:
         text = experten.FragenExperte().notiz_schreiben(a["title"], roh)
-    return (gr.update(value=text, visible=True),
-            "Are any changes neccessary? Now is the time.")
+    db.reflexionsnotiz_speichern(artefakt_id, text)
+    return text, gr.update(open=True), notiz_stand_html(True)
 
 
 def notiz_sichern(artefakt_id, text):
     if artefakt_id is None:
         return gr.skip()
     db.reflexionsnotiz_speichern(artefakt_id, (text or "").strip())
-    return "Notes saved – you can find them in the document history with this version."
+    return notiz_stand_html(True)
 
 
 def anregungen_nachlegen(artefakt_id, zaehler):
     """Schaut noch einmal auf den jetzigen Stand und ergänzt Offenes."""
     if artefakt_id is None:
-        return gr.skip(), gr.skip(), gr.skip()
+        return (gr.skip(),) * 5
     neu = pruefpunkte_erzeugen(artefakt_id, erneut=True)
     return (zaehler + 1, freigabe_kopf(artefakt_id),
             f"{neu} new challenge(s)." if neu
-            else "Nothing new – your current draft is covered.")
+            else "Nothing new – your current draft is covered.",
+            text_stand(artefakt_id), gr.update(visible=False))
+
+
+def text_stand(artefakt_id):
+    """Fingerabdruck des Dokumenttexts – erkennt Arbeit im anderen Fenster."""
+    text = db.arbeitsstand_text(artefakt_id) or ""
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def frei_puls(artefakt_id, gesehen):
+    """Zeigt den Nachlegen-Knopf, sobald sich der Text geändert hat."""
+    if artefakt_id is None:
+        return gr.skip()
+    return gr.update(visible=text_stand(artefakt_id) != gesehen)
 
 
 def dokument_hinweis(artefakt_id):
@@ -1271,8 +1513,7 @@ def dokument_hinweis(artefakt_id):
 
 
 # ---------- Hauptseite ----------
-with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor",
-               fill_width=True) as forschungs_app:
+with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor", fill_width= True) as forschungs_app:
     gr.Navbar(visible=False)
 
     # States
@@ -1330,7 +1571,7 @@ with gr.Blocks(css=CSS, theme=THEMA, title="Science Mentor",
 
         # Chatbot
         with gr.Column(scale=3):
-            chatbot = gr.Chatbot(height=500)
+            chatbot = gr.Chatbot(height=400)
 
             # Eingabezeile mit Senden-Button
             with gr.Row():
@@ -1383,6 +1624,7 @@ with forschungs_app.route("Document", "/doc") as doc_page:
     vorschlag_stand = gr.State("")
     doc_stand = gr.State(0)            # zuletzt gesehene Versionsnummer
     gezeigte_version = gr.State(None)  # welche alte Version ist aufgeklappt?
+    restore_ziel = gr.State(None)
 
     id_box = gr.Textbox(visible=False)     # Zwischenspeicher für die ID
     kopf_zeile = gr.Textbox(visible=False) # Stempel für die Kopie
@@ -1440,6 +1682,7 @@ with forschungs_app.route("Document", "/doc") as doc_page:
                         value=diff_paare(aktuell, t["neu"]),
                         color_map={"+": "green", "-": "red"},
                         show_legend=False, show_label=False,
+                        elem_classes=["diffbox"],
                     )
                     cb = gr.Checkbox(
                         label="apply",
@@ -1473,7 +1716,7 @@ with forschungs_app.route("Document", "/doc") as doc_page:
     # Selbst Änderungen vornehmen
     with gr.Tabs():
         with gr.Tab("Read"):
-            vorschau = gr.Markdown(elem_id="dok_vorschau")
+            vorschau = gr.Markdown(elem_id="dok_vorschau", line_breaks=True)
             vorschau_code = gr.Code(visible=False, show_label=False,
                                     interactive=False)
             vorschau_tabelle = gr.Dataframe(visible=False, show_label=False,
@@ -1503,6 +1746,14 @@ with forschungs_app.route("Document", "/doc") as doc_page:
                                            size="sm", variant="primary",
                                            visible=False)
 
+    with gr.Column(visible=False, elem_id="restorefenster") as restore_box:
+        restore_titel = gr.Markdown(container=False)
+        with gr.Row():
+            restore_zu_btn = gr.Button("Cancel", size="sm")
+            restore_weg_btn = gr.Button("Discard and restore", size="sm")
+            restore_ok_btn = gr.Button("Save my changes, then restore",
+                                       size="sm", variant="primary")
+            
     meldung = gr.Markdown()
 
 
@@ -1555,11 +1806,21 @@ with forschungs_app.route("Document", "/doc") as doc_page:
                     gezeigte_version, gezeigte_version,
                 )
                 zurueck_btn.click(
-                    lambda n=v["n"], aid=aid: zuruecksetzen_ui(aid, n),
-                    None, [kopf, inhalt, doc_stand],
+                    lambda i, t, n=v["n"]: restore_pruefen(i, n, t),
+                    [id_box, inhalt],
+                    [restore_box, restore_titel, restore_ziel,
+                     kopf, inhalt, doc_stand],
                 )
 
                 if gezeigt == v["n"]:
+                    rueckblick = reflexions_rueckblick(aid, v["n"])
+                    if v["reflexion"] or rueckblick:
+                        with gr.Accordion("🪞 Reflection on this version",
+                                          open=True):
+                            if v["reflexion"]:
+                                gr.Markdown(v["reflexion"], container=False)
+                            if rueckblick:
+                                gr.Markdown(rueckblick, container=False)
                     gr.Textbox(
                         value=db.version_holen(aid, v["n"])["content"],
                         lines=12, interactive=False,
@@ -1708,6 +1969,17 @@ with forschungs_app.route("Document", "/doc") as doc_page:
         lambda: gr.update(visible=False), None, version_box,
     )
 
+
+    restore_zu_btn.click(lambda: gr.update(visible=False), None, restore_box)
+    restore_ok_btn.click(
+        restore_mit_sicherung, [id_box, restore_ziel],
+        [restore_box, kopf, inhalt, doc_stand],
+    )
+    restore_weg_btn.click(
+        restore_ohne_sicherung, [id_box, restore_ziel],
+        [restore_box, kopf, inhalt, doc_stand],
+    )
+
     # Reflektieren – nur über eine festgehaltene Fassung
     # JS steht am Anfang der Kette – sonst blockt der Browser das Fenster
     freigabe_btn.click(
@@ -1736,18 +2008,30 @@ with forschungs_app.route("Reflect", "/freigabe") as freigabe_page:
     frei_chat = gr.State(None)        # Freigabe-Chat
     punkt_stand = gr.State(0)         # Zähler fürs Neuzeichnen
     aktiver_punkt = gr.State(None)    # worüber gerade gesprochen wird
+    frei_textstand = gr.State("")     # Hat sich etwas im Dokument geändert?
 
     # Components
     frei_id_box = gr.Textbox(visible=False)
     frei_kopf = gr.Markdown(elem_id="frei_kopf")
-    frei_hinweis = gr.Markdown(container=False)
+
+    with gr.Accordion("📝 Reflection summary", open=False) as notiz_klappe:
+        notiz_box = gr.Textbox(
+            show_label=False, container=False, lines=7, interactive=True,
+            placeholder="What do you take away from this session? Write it "
+                        "yourself – or let me draft it from the challenges.",
+        )
+        with gr.Row():
+            notiz_btn = gr.Button("Draft it for me", size="sm",
+                                  scale=0, min_width=150)
+            notiz_stand = gr.HTML(notiz_stand_html(True))
 
     with gr.Row():
         with gr.Column(scale=2):
             gr.Markdown("### Challenging points")
-            nachlegen_btn = gr.Button("🔄 Check current draft", size="sm")
+            nachlegen_btn = gr.Button("🔄 Check my latest changes",
+                                      size="sm", visible=False)
 
-            @gr.render(inputs=[frei_id, punkt_stand, aktiver_punkt])
+
             @gr.render(inputs=[frei_id, punkt_stand, aktiver_punkt])
             def zeige_punkte(aid, _stand, aktiv_id):
                 if aid is None:
@@ -1758,50 +2042,69 @@ with forschungs_app.route("Reflect", "/freigabe") as freigabe_page:
                     return
 
                 offen = [p for p in punkte if p["status"] == "offen"]
-                fertig = [p for p in punkte if p["status"] != "offen"]
+                geloest = [p for p in punkte if p["status"] == "geklaert"]
+                beiseite = [p for p in punkte if p["status"] == "uebersprungen"]
+
+                if not offen:
+                    gr.Markdown(klein("Nothing open right now."))
 
                 for p in offen:
                     with gr.Group():
                         gr.Markdown(
                             f"{'🗣' if p['id'] == aktiv_id else '⬜'} "
                             f"{'❗ ' if p['prioritaet'] == 1 else ''}"
-                            f"**{p['abschnitt'] or 'Allgemein'}**  \n"
+                            f"**{p['abschnitt'] or 'General'}**  \n"
                             f"{p['frage']}"
                         )
                         with gr.Row():
-                            bespr_btn = gr.Button("Accept the challenge", size="sm")
-                            ueber_btn = gr.Button("Not neccessary", size="sm")
+                            bespr_btn = gr.Button("Write about this", size="sm")
+                            ueber_btn = gr.Button("No reflection needed on this", size="sm")
 
                         bespr_btn.click(
                             lambda cid, z, pid=p["id"]:
                                 punkt_besprechen(pid, cid, z),
                             [frei_chat, punkt_stand],
-                            [aktiver_punkt, frei_chatbot, punkt_stand],
+                            [aktiver_punkt, frei_chatbot, punkt_stand,
+                             grund_box],
                         )
                         ueber_btn.click(
-                            lambda z, aid=aid, pid=p["id"]: (
+                            lambda z, a=aid, pid=p["id"]: (
                                 db.pruefpunkt_abschliessen(
                                     pid, "uebersprungen",
                                     begruendung="nicht nötig"),
-                                z + 1, freigabe_kopf(aid),
+                                z + 1, freigabe_kopf(a),
                             )[1:],
                             punkt_stand, [punkt_stand, frei_kopf],
                         )
 
-                if not fertig:
-                    return
+                # Erledigtes liegt eingeklappt daneben – jederzeit zurückholbar
+                def klappe(liste, titel, zeichen):
+                    if not liste:
+                        return
+                    with gr.Accordion(f"{titel} · {len(liste)}", open=False):
+                        for p in liste:
+                            text = p["antwort"] or p["begruendung"] or ""
+                            with gr.Row():
+                                gr.Markdown(
+                                    f"{zeichen} **{p['abschnitt'] or 'General'}**"
+                                    f"  \n{p['frage']}"
+                                    + (f"  \n{klein(text)}" if text else ""),
+                                    container=False,
+                                )
+                                zurueck_btn = gr.Button(
+                                    "Bring back", size="sm",
+                                    scale=0, min_width=110,
+                                )
+                            zurueck_btn.click(
+                                lambda z, a=aid, pid=p["id"]: (
+                                    db.pruefpunkt_wieder_oeffnen(pid),
+                                    z + 1, freigabe_kopf(a),
+                                )[1:],
+                                punkt_stand, [punkt_stand, frei_kopf],
+                            )
 
-                with gr.Accordion(f"✅ {len(fertig)} already handled",
-                                  open=False):
-                    for p in fertig:
-                        zeichen = "✅" if p["status"] == "geklaert" else "↷"
-                        text = p["antwort"] or p["begruendung"] or ""
-                        gr.Markdown(
-                            f"{zeichen} **{p['abschnitt'] or 'Allgemein'}**  \n"
-                            f"{p['frage']}"
-                            + (f"  \n{klein(text)}" if text else ""),
-                            container=False,
-                        )
+                klappe(geloest, "Solved", "✅")
+                klappe(beiseite, "Discarded", "↷")
 
         with gr.Column(scale=3):
             frei_chatbot = gr.Chatbot(height=380)
@@ -1813,14 +2116,16 @@ with forschungs_app.route("Reflect", "/freigabe") as freigabe_page:
                 frei_senden_btn = gr.Button("➤", variant="primary",
                                             scale=1, min_width=10)
 
-    gr.Markdown(TRENNER, container=False)
-    notiz_box = gr.Textbox(
-        label="Reflection summary", lines=8, visible=False, interactive=True,
-    )
-    with gr.Row():
-        notiz_btn = gr.Button("Sum up this session")
-        notiz_sichern_btn = gr.Button("Save summary", variant="primary")
+            with gr.Group(visible=False) as grund_box:
+                gr.Markdown(klein("No reason to give is a decision too – "
+                                  "which way do you want it?"))
+                with gr.Row():
+                    grund_halten_btn = gr.Button("Keep it as it is", size="sm")
+                    grund_aendern_btn = gr.Button("I'll revise it", size="sm",
+                                                  variant="primary")
+
     frei_meldung = gr.Markdown()
+
 
     # Wires
     freigabe_page.load(
@@ -1832,8 +2137,45 @@ with forschungs_app.route("Reflect", "/freigabe") as freigabe_page:
         lambda: "## 🪞 preparing …", None, frei_kopf,
     ).then(
         freigabe_laden, frei_id_box,
-        [frei_id, frei_chat, frei_kopf, frei_chatbot, notiz_box],
+        [frei_id, frei_chat, frei_kopf, frei_chatbot,
+         notiz_box, notiz_klappe, frei_textstand],
     )
+
+    frei_senden_btn.click(
+        freigabe_senden,
+        [frei_eingabe, frei_chat, frei_id, aktiver_punkt, punkt_stand],
+        [frei_eingabe, frei_chatbot, punkt_stand, aktiver_punkt,
+         frei_kopf, grund_box],
+    )
+
+    grund_halten_btn.click(
+        kein_grund_behalten,
+        [frei_id, aktiver_punkt, frei_chat, punkt_stand],
+        [punkt_stand, frei_kopf, frei_chatbot, aktiver_punkt, grund_box],
+    )
+    grund_aendern_btn.click(
+        kein_grund_ueberarbeiten,
+        [frei_id, aktiver_punkt, frei_chat, punkt_stand],
+        [punkt_stand, frei_kopf, frei_chatbot, aktiver_punkt, grund_box],
+    )
+
+    notiz_btn.click(notiz_erzeugen, frei_id,
+                    [notiz_box, notiz_klappe, notiz_stand])
+    notiz_box.blur(notiz_sichern, [frei_id, notiz_box], notiz_stand)
+    notiz_box.input(
+        fn=None,
+        js="() => { const el = document.getElementById('nstat');"
+           " if (el) { el.textContent = '• unsaved';"
+           " el.style.color = 'var(--body-text-color-subdued)'; } }",
+    )
+
+    nachlegen_btn.click(
+        anregungen_nachlegen, [frei_id, punkt_stand],
+        [punkt_stand, frei_kopf, frei_meldung, frei_textstand, nachlegen_btn],
+    )
+
+    frei_takt = gr.Timer(3)
+    frei_takt.tick(frei_puls, [frei_id, frei_textstand], nachlegen_btn)
 
     frei_kopf.change(
         fn=None,
@@ -1841,17 +2183,6 @@ with forschungs_app.route("Reflect", "/freigabe") as freigabe_page:
            " const h = document.querySelector('#frei_kopf h2');"
            " if (h) document.title = h.textContent.trim(); }, 50)",
     )
-
-    nachlegen_btn.click(anregungen_nachlegen, [frei_id, punkt_stand],
-                        [punkt_stand, frei_kopf, frei_meldung])
-
-    frei_senden_btn.click(
-        freigabe_senden,
-        [frei_eingabe, frei_chat, frei_id, aktiver_punkt, punkt_stand],
-        [frei_eingabe, frei_chatbot, punkt_stand, aktiver_punkt, frei_kopf],
-    )
-    notiz_btn.click(notiz_erzeugen, frei_id, [notiz_box, frei_meldung])
-    notiz_sichern_btn.click(notiz_sichern, [frei_id, notiz_box], frei_meldung)
 
 
 

@@ -22,11 +22,11 @@ class ArtefaktTyp:
 KATALOG = [
     ArtefaktTyp(
         key="praereg",
-        titel="Präregistrierung",
-        schritte=[1, 2],
+        titel="Preregistration",
+        schritte=[1, 2, 3],
         typ="text",
         vorlage=(
-            "## Research question and hypotheses\n\n_(open)_\n\n"
+            "## Hypotheses\n\n_(open)_\n\n"
             "## Sample\n\n_(open)_\n\n"
             "## Exclusion criteria\n\n_(open)_\n\n"
             "## Study design\n\n_(open)_\n\n"
@@ -34,30 +34,36 @@ KATALOG = [
             "## Analysis plan\n\n_(open)_\n"
         ),
         prompt_zusatz=(
-            "Schreibe im Präsens und in Planungssprache. "
-            "Nimm keine Ergebnisse vorweg. Formuliere Hypothesen gerichtet, "
-            "wenn theoretisch begründbar."
+            "\n\nDen Abschnitt „Hypotheses“ verantwortet der Experte für "
+            "Schritt 1."
+            "\n\nDie Abschnitte Sample, Exclusion criteria, Study design und "
+            "Instruments and measurement verantwortet der Experte für Schritt 2."
+            "\n\nDen Abschnitt „Analysis plan“ verantwortet der Experte für "
+            "Schritt 3. Er steht in Planungssprache und legt je Hypothese "
+            "fest, welches Modell gerechnet wird – nicht, was dabei "
+            "herauskommt."
         ),
     ),
     ArtefaktTyp(
         key="codebuch",
-        titel="Codebuch / Variablenliste",
+        titel="Codebook / variable list",
         schritte=[2],
         typ="tabelle",
         vorlage=(
-            "| Variable | Meaning | Scale | Values | Missings |\n"
+            "| Variable | Meaning | Scale | Values | Missing |\n"
             "|---|---|---|---|---|\n"
             "|  |  |  |  |  |\n"
         ),
         prompt_zusatz=(
-            "Verwende gültige, kurze Variablennamen ohne Umlaute und Leerzeichen. "
-            "Gib bei jeder Variable das Skalenniveau und die Kodierung an."
+            "Verwende gültige, kurze Variablennamen ohne Umlaute und "
+            "Leerzeichen. Gib bei jeder Variable das Skalenniveau und die "
+            "Kodierung an."
         ),
         baut_auf=["praereg"],
     ),
     ArtefaktTyp(
         key="analysecode",
-        titel="Analysecode",
+        titel="Analysis code",
         schritte=[3],
         typ="code",
         vorlage=(
@@ -77,7 +83,7 @@ KATALOG = [
     ),
     ArtefaktTyp(
         key="ergebnisteil",
-        titel="Ergebnisteil",
+        titel="Results section",
         schritte=[4, 5],
         typ="text",
         vorlage=(
@@ -87,8 +93,8 @@ KATALOG = [
             "## Tables and figures\n\n_(open)_\n"
         ),
         prompt_zusatz=(
-            "Berichte Kennwerte vollständig (Teststatistik, df, p, Effektstärke). "
-            "Trenne Befund und Deutung sauber."
+            "Berichte Kennwerte vollständig (Teststatistik, df, p, "
+            "Effektstärke). Trenne Befund und Deutung sauber."
         ),
         baut_auf=["analysecode"],
     ),
