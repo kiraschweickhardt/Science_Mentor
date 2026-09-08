@@ -1032,8 +1032,8 @@ class FragenExperte(Experte):
             "klar ist, worauf du zeigst.\n"
             "- Lieber ein Punkt weniger als einer zu viel.\n"
             "- So viele Punkte, wie es Knackpunkte gibt: bei einer kleinen "
-            "Änderung oft nur einer, bei einer großen auch fünf. Gibt es "
-            "keinen, gib eine leere Liste zurück. Nimm nichts auf, nur "
+            "Änderung oft nur einer, bei einer großen auch mehr (niemals mehr als fünf)."
+            "Gibt es keinen, gib eine leere Liste zurück. Nimm nichts auf, nur "
             "damit die Liste länger wird.\n"
             "- Priorität 1 für gelöschte Inhalte sowie für Änderungen an "
             "Hypothesen, Stichprobe, Ausschlusskriterien und Analyseplan. "
@@ -1046,8 +1046,7 @@ class FragenExperte(Experte):
             "etablierte Praxis verlangst du keine Herleitung.\n"
             "- Typische Knackpunkte bei Hypothesen: die angenommene "
             "Richtung, die Annahme eines linearen Zusammenhangs über den "
-            "erwarteten Wertebereich, kausale Sprache ohne Randomisierung, "
-            "und die Abgrenzung zwischen konfirmatorisch und explorativ.\n"
+            "erwarteten Wertebereich.\n"
             "- Nenne in 'abschnitt' die betroffene Überschrift."
         )
         antwort = erzeugen(

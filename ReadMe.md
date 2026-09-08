@@ -152,8 +152,8 @@ headings.
 - **Automatic saving** when the text field loses focus, on a timer, and with
   <kbd>Ctrl</kbd>+<kbd>S</kbd>. The indicator at the top right tells you where
   you stand.
-- **Save version** commits the current state as its own version – like a
-  commit, with a short description.
+- **Start a new version** commits the current state as its own version – like a
+  commit, with a short description and begins a new version.
 - **🪞 Reflect** opens the reflection dialogue about the draft you are working
   on. There is no need to save a version first.
 - **Restore** brings back an earlier version and offers to preserve your
@@ -169,11 +169,6 @@ regression, multilevel and longitudinal models or structural equation models
 are out of scope – the experts say so early and help cut a question down to
 size.
 
-Still open: tables can only be edited as text, there is no export, and the
+Still open: improvement of LLM experts and evaluation;
+tables can only be edited as text, there is no export, and the
 reflection summary could be substantially better.
-
----
-
-## Licence
-
-MIT
